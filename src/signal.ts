@@ -17,7 +17,7 @@ export interface DerivedSignal<T> extends ReadableSignal<T> {
 /** An effect performs an action if one or more sources have changed */
 export interface Effect {
     /** Effect invoker */
-    (): void
+    (): void //TODO Give it a name so it does not interfere with the signals
 }
 
 /** A readable signal type */
@@ -104,8 +104,20 @@ export function effect(...args: any[]): any {
     return asEffect({ d: s, n: MIN_N, f: e });
 }
 
+/**
+ * Perform bulk recalculation run of the provided signals. Only changed signals are propagated through. 
+ * Use this method at the appropriate time when these updates should occur.
+*/
 export function recalculate<P extends DerivedSignalTypes>(derived: P): DerivedSignalValues<P> {
     return derived.map(x => x()) as DerivedSignalValues<P>;
+}
+
+/**
+ * Perform bulk reaction run of the provided effects. Only changed signals are propagated through. 
+ * Use this method at the appropriate time when these effects should occur.
+*/
+export function react(effects: Effect[]): void {
+    effects.forEach(x => x());
 }
 
 // Internals
@@ -154,6 +166,11 @@ type DerivedNode<T> = ValueNode<T> & DependentNode & {
     f: Calc<T>
 };
 
+type MaybeDerivedNode<T> = ValueNode<T> & {
+    d?: ValueNode<any>[]
+    f?: Calc<T>
+}
+
 type EffectNode = DependentNode & {
     /** The action function to execute when dependencies change */
     f: Act
@@ -200,8 +217,8 @@ function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> & Self<DerivedNode
         if (cn > self.n) {
             //Changes has occured. Check dependencies.
             const m = maxN(self.d.map(x => x.n));
-            if (m > self.n) {
-                self.v = self.f(self.d.map(x => x.v));
+            if (m == MIN_N || m > self.n) {
+                self.v = self.f(self.d.map(x => valueOf(x)));
             }
         }
         self.n = cn;
@@ -219,12 +236,16 @@ function asEffect(node: EffectNode): Effect & Self<EffectNode> {
         if (cn > self.n) {
             //Changes has occured. Check dependencies.
             const m = maxN(self.d.map(x => x.n));
-            if (m > self.n) {
-                self.f(self.d.map(x => x.v));
+            if (m == MIN_N || m > self.n) {
+                self.f(self.d.map(x => valueOf(x)));
             }
         }
         self.n = cn;
     };
     f._self = node;
     return f;
+}
+
+function valueOf<T>(node: MaybeDerivedNode<T>):T {
+    return node.f && node.d ? asDerived(node as DerivedNode<T>)() : asReadable(node)();
 }
