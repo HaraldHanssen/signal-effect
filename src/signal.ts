@@ -27,12 +27,12 @@ export type ReadableSignalValues<T> = { [K in keyof T]: T[K] extends ReadableSig
 
 /** Create a writable signal with the provided initial value */
 export function signal<T>(initial: T): WritableSignal<T> {
-    return asWritable({ v: nextV(), t: initial });
+    return asWritable({ n: nextN(), v: initial });
 }
 
 /** Create a read only signal from an existing signal */
 export function readonly<T>(signal: WritableSignal<T>): ReadableSignal<T> {
-    return asReadable((signal as unknown as SignalInfoRef<T>)._self);
+    return asReadable((signal as unknown as Self<ValueNode<T>>)._self);
 }
 
 /** Create a derived/calculated signal from one or more sources */
@@ -49,15 +49,15 @@ export function derived<P extends ReadableSignalTypes, T>(sources: P, calc: (val
 export function derived(...args: any[]): any {
     if (args.length < 2) throw Error("Expected at least 2 parameters!");
     if (args.length == 2 && Array.isArray(args[0])) {
-        const s = args[0].map(x => (x as unknown as SignalInfoRef<any>)._self);
+        const s = args[0].map(x => (x as unknown as Self<any>)._self);
         const d = args.slice(-1)[0] as Calc<any>;
-        return asDerived({ s, v: MIN_V, t: undefined, d });
+        return asDerived({ d: s, n: MIN_N, v: undefined, f: d });
     }
 
-    const s = args.slice(0, -1).map(x => (x as unknown as SignalInfoRef<any>)._self);
+    const s = args.slice(0, -1).map(x => (x as unknown as Self<any>)._self);
     const dd = args.slice(-1)[0] as ((...a:any[]) => any);
     const d = ((a:any[]) => dd(...a)) as Calc<any>;
-    return asDerived({ s, v: MIN_V, t: undefined, d });
+    return asDerived({ d: s, n: MIN_N, v: undefined, f: d });
 }
 
 /** Create an effect/action from one or more sources */
@@ -74,31 +74,33 @@ export function effect<P extends ReadableSignalTypes>(sources: P, act: (values: 
 export function effect(...args: any[]): any {
     if (args.length < 2) throw Error("Expected at least 2 parameters!");
     if (args.length == 2 && Array.isArray(args[0])) {
-        const s = args[0].map(x => (x as unknown as SignalInfoRef<any>)._self);
+        const s = args[0].map(x => (x as unknown as Self<any>)._self);
         const e = args.slice(-1)[0] as Act;
-        return asEffect({ s, v: MIN_V, e });
+        return asEffect({ d: s, n: MIN_N, f: e });
     }
 
-    const s = args.slice(0, -1).map(x => (x as unknown as SignalInfoRef<any>)._self);
+    const s = args.slice(0, -1).map(x => (x as unknown as Self<any>)._self);
     const ee = args.slice(-1)[0] as ((...a:any[]) => void);
     const e = ((a:any[]) => ee(...a)) as Act;
-    return asEffect({ s, v: MIN_V, e });
+    return asEffect({ d: s, n: MIN_N, f: e });
 }
 
 // Internals
 // Monotonically increasing version number
-type VersionType = bigint;
-const MIN_V: VersionType = 0n
-let _version: VersionType = MIN_V;
-function nextV(): VersionType {
-    return (++_version);
-}
-function currV(): VersionType {
-    return _version;
+type NumberType = bigint;
+const MIN_N: NumberType = 0n
+let _currN: NumberType = MIN_N;
+
+function nextN(): NumberType {
+    return (++_currN);
 }
 
-function maxV(values: VersionType[]): VersionType {
-    let m = MIN_V;
+function currN(): NumberType {
+    return _currN;
+}
+
+function maxN(values: NumberType[]): NumberType {
+    let m = MIN_N;
     for (let i = 0; i < values.length; i++) {
         const v = values[i];
         if (v > m) {
@@ -108,101 +110,99 @@ function maxV(values: VersionType[]): VersionType {
     return m;
 }
 
+// Node information
 type Node = {
     /** The version number representing the current value or effect */
-    v: VersionType
+    n: NumberType
 };
 
 type DependentNode = Node & {
-    /** The signal sources */
-    s: SignalInfo<any>[]
+    /** The value dependencies */
+    d: ValueNode<any>[]
 };
 
-/** Signal information */
-type SignalInfo<T> = Node & {
-    /** The current value */
-    t?: T
+type ValueNode<T> = Node & {
+    /** The current value of the given type */
+    v?: T
 };
 
-/** Reference field is added to the facades */
-type SignalInfoRef<T> = {
-    _self: SignalInfo<T>
+type DerivedNode<T> = ValueNode<T> & DependentNode & {
+    /** The calculation function to execute when dependencies change */
+    f: Calc<T>
 };
 
-/** Derived information */
-type DerivedInfo<T> = SignalInfo<T> & DependentNode & {
-    /** The calculate function */
-    d: Calc<T>
+type EffectNode = DependentNode & {
+    /** The action function to execute when dependencies change */
+    f: Act
 };
 
 /** Calculation signature */
 type Calc<T> = (args: any[]) => T;
 
-/** Effect information */
-type EffectInfo = DependentNode & {
-    /** The action */
-    e: Act
-};
-
 /** Action signature */
 type Act = (args: any[]) => void;
 
+type Self<T> = {
+    /** The reference field that is added to the facades */
+    _self: T
+};
+
 /** Wrap info in a writable facade */
-function asWritable<T>(info: SignalInfo<T>): WritableSignal<T> & SignalInfoRef<T> {
+function asWritable<T>(node: ValueNode<T>): WritableSignal<T> & Self<ValueNode<T>> {
     const f = (next?: T): any => {
         const self = f._self;
-        if (next == undefined) return self.t!;
-        if (Object.is(self.t, next)) return;
-        self.t = next;
-        self.v = nextV();
+        if (next == undefined) return self.v!;
+        if (Object.is(self.v, next)) return;
+        self.v = next;
+        self.n = nextN();
     };
-    f._self = info;
+    f._self = node;
     return f;
 }
 
 /** Wrap info in a readable facade */
-function asReadable<T>(info: SignalInfo<T>): ReadableSignal<T> & SignalInfoRef<T> {
+function asReadable<T>(node: ValueNode<T>): ReadableSignal<T> & Self<ValueNode<T>> {
     const f = (_?: T): any => {
-        return f._self.t!;
+        return f._self.v!;
     };
-    f._self = info;
+    f._self = node;
     return f;
 }
 
 /** Wrap info in a derived facade */
-function asDerived<T>(info: DerivedInfo<T>): ReadableSignal<T> & SignalInfoRef<T> {
+function asDerived<T>(node: DerivedNode<T>): ReadableSignal<T> & Self<DerivedNode<T>> {
     const f = (_?: T): any => {
         const self = f._self;
-        const cv = currV();
-        if (cv > self.v) {
+        const cn = currN();
+        if (cn > self.n) {
             //Changes has occured. Check dependencies.
-            const m = maxV(self.s.map(x => x.v));
-            if (m > self.v) {
-                self.t = self.d(self.s.map(x => x.t));
+            const m = maxN(self.d.map(x => x.n));
+            if (m > self.n) {
+                self.v = self.f(self.d.map(x => x.v));
             }
         }
-        self.v = cv;
-        return self.t!;
+        self.n = cn;
+        return self.v!;
     };
-    f._self = info;
+    f._self = node;
     return f;
 }
 
 
 /** Wrap info in an effect facade */
-function asEffect(info: EffectInfo): Effect {
+function asEffect(node: EffectNode): Effect & Self<EffectNode> {
     const f = (): void => {
         const self = f._self;
-        const cv = currV();
-        if (cv > self.v) {
+        const cn = currN();
+        if (cn > self.n) {
             //Changes has occured. Check dependencies.
-            const m = maxV(self.s.map(x => x.v));
-            if (m > self.v) {
-                self.e(self.s.map(x => x.t));
+            const m = maxN(self.d.map(x => x.n));
+            if (m > self.n) {
+                self.f(self.d.map(x => x.v));
             }
         }
-        self.v = cv;
+        self.n = cn;
     };
-    f._self = info;
+    f._self = node;
     return f;
 }
