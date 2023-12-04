@@ -1,9 +1,17 @@
-/** A readable signal supports reading the signal value */
+let _version = 0;
+function nextV(): number {
+    return (++_version);
+}
+function currV(): number {
+    return _version;
+}
+
+/** A readable signal supports reading the current value */
 export interface ReadableSignal<T> {
     (): T,
 }
 
-/** A writable signal supports writing a signal value */
+/** A writable signal supports writing the next value */
 export interface WritableSignal<T> extends ReadableSignal<T> {
     (next: T): void
 }
@@ -19,7 +27,7 @@ type Signal<T> = {
 /** Create a writable signal with the provided initial value */
 export function signal<T>(initial: T): WritableSignal<T> {
     function create():Signal<T> {
-        return { v: 0, t: initial };
+        return { v: nextV(), t: initial };
     }
     const s: Signal<T> = create();
     return (next?: T, info?:boolean): any => {
@@ -27,7 +35,7 @@ export function signal<T>(initial: T): WritableSignal<T> {
         if (next == undefined) return s.t;
         if (Object.is(s.t, next)) return;
         s.t = next;
-        s.v++;
+        s.v = nextV();
     };
 }
 
@@ -43,8 +51,8 @@ type DerivedCallback<T> = (...args: any[]) => T;
 type Derived<T> = {
     /** The signal sources */
     s: Signal<any>[]
-    /** The versions of the signals used in the cache */
-    v?: number[],
+    /** The monotonically increasing version */
+    v: number,
     /** The cached value */
     t?: T,
     /** The calculate function */
@@ -57,14 +65,20 @@ export function derived1<TIn, TOut>(source:ReadableSignal<TIn>, calculate:(sourc
         const src = source as GetSignalInfo<TIn>;
         const c:DerivedCallback<TOut> = calculate;
         const s:Signal<any>[] = [info(src)];
-        return { s, v: undefined, t: undefined, c };
+        return { s, v: 0, t: undefined, c };
     }
     const d: Derived<TOut> = create();
     return (_?:TOut, info?:true):any => {
         if (info) return d;
-        if (d.v && d.v.every((e,i) => e == d.s[i].v)) return d.t!;
-        d.t = d.c(d.s.map(x => x.t));
-        d.v = d.s.map(x => x.v);
-        return d.t;
+        const cv = currV();
+        if (cv > d.v) {
+            //Changes has occured. Check dependencies.
+            const m = Math.max(...d.s.map(x => x.v));
+            if (m > d.v) {
+                d.t = d.c(d.s.map(x => x.t));
+            }
+        }        
+        d.v = cv;
+        return d.t!;
     };
 }

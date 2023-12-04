@@ -25,3 +25,20 @@ test("get derived value", () => {
     expect(d()).toBe(86);
     expect(calculated).toBe(2);
 });
+test("derived value is only affected by dependent signals", () => {
+    let calculated = 0;
+    const s = signal(42);
+    const t = signal(4);
+    const d = derived1(s, (x) => {
+        calculated++;
+        return 2*x;
+    });
+    expect(d()).toBe(84);
+    expect(calculated).toBe(1);
+    t(3);
+    expect(d()).toBe(84);
+    expect(calculated).toBe(1);
+    s(43);
+    expect(d()).toBe(86);
+    expect(calculated).toBe(2);
+});
