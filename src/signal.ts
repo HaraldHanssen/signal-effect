@@ -212,17 +212,7 @@ function asReadable<T>(node: ValueNode<T>): ReadableSignal<T> & Self<ValueNode<T
 /** Wrap info in a derived facade */
 function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> & Self<DerivedNode<T>> {
     const f = (_?: T): any => {
-        const self = f._self;
-        const cn = currN();
-        if (cn > self.n) {
-            //Changes has occured. Check dependencies.
-            const m = maxN(self.d.map(x => x.n));
-            if (m == MIN_N || m > self.n) {
-                self.v = self.f(self.d.map(x => valueOf(x)));
-            }
-        }
-        self.n = cn;
-        return self.v!;
+        return valueDerived(f._self);
     };
     f._self = node;
     return f;
@@ -231,21 +221,37 @@ function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> & Self<DerivedNode
 /** Wrap info in an effect facade */
 function asEffect(node: EffectNode): Effect & Self<EffectNode> {
     const f = (): void => {
-        const self = f._self;
-        const cn = currN();
-        if (cn > self.n) {
-            //Changes has occured. Check dependencies.
-            const m = maxN(self.d.map(x => x.n));
-            if (m == MIN_N || m > self.n) {
-                self.f(self.d.map(x => valueOf(x)));
-            }
-        }
-        self.n = cn;
+        doEffect(f._self);
     };
     f._self = node;
     return f;
 }
 
 function valueOf<T>(node: MaybeDerivedNode<T>):T {
-    return node.f && node.d ? asDerived(node as DerivedNode<T>)() : asReadable(node)();
+    return node.f && node.d ? valueDerived(node as DerivedNode<T>) : node.v!;
+}
+
+function valueDerived<T>(self: DerivedNode<T>): T {
+    const cn = currN();
+    if (cn > self.n) {
+        //Changes has occured. Check dependencies.
+        const m = maxN(self.d.map(x => x.n));
+        if (m == MIN_N || m > self.n) {
+            self.v = self.f(self.d.map(x => valueOf(x)));
+        }
+    }
+    self.n = cn;
+    return self.v!;
+}
+
+function doEffect(self: EffectNode): void {
+    const cn = currN();
+    if (cn > self.n) {
+        //Changes has occured. Check dependencies.
+        const m = maxN(self.d.map(x => x.n));
+        if (m == MIN_N || m > self.n) {
+            self.f(self.d.map(x => valueOf(x)));
+        }
+    }
+    self.n = cn;
 }
