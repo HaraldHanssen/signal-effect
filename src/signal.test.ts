@@ -1,4 +1,4 @@
-import { derived, derivedN, readonly, signal } from "./signal";
+import { derived, readonly, signal } from "./signal";
 test("get signal value", () => {
     const s = signal(42);
     expect(s()).toBe(42);
@@ -37,7 +37,7 @@ test("get derived value from N signals", () => {
     const s = signal(42);
     const t = signal(4);
 
-    const d = derivedN([s,t], ([x, y]) => {
+    const d = derived([s,t], ([x, y]) => {
         calculated++;
         return x + y;
     });
