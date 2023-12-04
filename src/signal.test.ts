@@ -1,4 +1,4 @@
-import { derived, effect, readonly, signal } from "./signal";
+import { derived, effect, readonly, recalculate, signal } from "./signal";
 
 test("get signal value", () => {
     const s = signal(42);
@@ -143,4 +143,46 @@ test("derived value is only affected by dependent signals", () => {
     u(1);
     e();
     expect(acted).toBe(3);
+});
+
+test("recalculate can do bulk update on N levels derived signals", () => {
+    let acted = 0;
+    const s = signal(42);
+    const t = signal(4);
+    const u = signal(2);
+    const a = derived(s, t, u, (x, y, z) => {
+        acted++;
+        return `${x}:${y}:${z}`;
+    });
+    const b = derived(s, t, u, (x, y, z) => {
+        acted++;
+        return x + y + z;
+    });
+    const c = derived(s, t, u, (x, y, z) => {
+        acted++;
+        return `${z}:${y}:${x}`;
+    });
+    const d = derived(a, b, c, (x, y, z) => {
+        acted++;
+        return `${x}:${y}:${z}`;
+    });
+    const e = derived(b, d, (x, y) => {
+        acted++;
+        return `${x}:${y}`;
+    });
+    expect(acted).toBe(0);
+    const r1 = recalculate([a, b, c, d, e]);
+    expect(acted).toBe(5);
+    expect(r1[0]).toBe("42:4:2");
+    expect(r1[1]).toBe(48);
+    expect(r1[2]).toBe("2:4:42");
+    expect(r1[3]).toBe("42:4:2:48:2:4:42");
+    expect(r1[4]).toBe("48:42:4:2:48:2:4:42");
+    const r2 = recalculate([a, b, c, d, e]);
+    expect(acted).toBe(5); // not called
+    expect(r2[0]).toBe("42:4:2");
+    expect(r2[1]).toBe(48);
+    expect(r2[2]).toBe("2:4:42");
+    expect(r2[3]).toBe("42:4:2:48:2:4:42");
+    expect(r2[4]).toBe("48:42:4:2:48:2:4:42");
 });

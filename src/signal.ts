@@ -1,13 +1,17 @@
 /** A readable signal supports reading the current value */
 export interface ReadableSignal<T> {
-    /** Value getter */
+    /** Value reader */
     (): T
 }
 
 /** A writable signal supports writing the next value */
 export interface WritableSignal<T> extends ReadableSignal<T> {
-    /** Value setter */
+    /** Value writer */
     (next: T): void
+}
+
+/** A derived performs a calculation if one or more sources have changed */
+export interface DerivedSignal<T> extends ReadableSignal<T> {
 }
 
 /** An effect performs an action if one or more sources have changed */
@@ -28,6 +32,18 @@ export type ReadableSignalTypes = [ReadableSignalType, ...Array<ReadableSignalTy
 /** Array of values from readable signals */
 export type ReadableSignalValues<T> = { [K in keyof T]: T[K] extends ReadableSignal<infer U> ? U : never };
 
+/** A derived signal type */
+export type DerivedSignalType = DerivedSignal<any>;
+
+/** A derived signal value */
+export type DerivedSignalValue<T> = T extends DerivedSignal<infer U> ? U : never;
+
+/** Array of derived signals */
+export type DerivedSignalTypes = [DerivedSignalType, ...Array<DerivedSignalType>] | Array<DerivedSignalType>;
+
+/** Array of values from derived signals */
+export type DerivedSignalValues<T> = { [K in keyof T]: T[K] extends DerivedSignal<infer U> ? U : never };
+
 /** Create a writable signal with the provided initial value */
 export function signal<T>(initial: T): WritableSignal<T> {
     return asWritable({ n: nextN(), v: initial });
@@ -39,16 +55,16 @@ export function readonly<T>(signal: WritableSignal<T>): ReadableSignal<T> {
 }
 
 /** Create a derived/calculated signal from one or more sources */
-export function derived<P extends ReadableSignalType, T>(r: P, calc: (r: ReadableSignalValue<P>) => T): ReadableSignal<T>;
+export function derived<P extends ReadableSignalType, T>(r: P, calc: (r: ReadableSignalValue<P>) => T): DerivedSignal<T>;
 export function derived<P1 extends ReadableSignalType, P2 extends ReadableSignalType, T>
-    (r1: P1, r2: P2, calc: (r1: ReadableSignalValue<P1>, r2: ReadableSignalValue<P2>) => T): ReadableSignal<T>;
+    (r1: P1, r2: P2, calc: (r1: ReadableSignalValue<P1>, r2: ReadableSignalValue<P2>) => T): DerivedSignal<T>;
 export function derived<P1 extends ReadableSignalType, P2 extends ReadableSignalType, P3 extends ReadableSignalType, T>
-    (r1: P1, r2: P2, r3: P3, calc: (r1: ReadableSignalValue<P1>, r2: ReadableSignalValue<P2>, r3: ReadableSignalValue<P3>) => T): ReadableSignal<T>;
+    (r1: P1, r2: P2, r3: P3, calc: (r1: ReadableSignalValue<P1>, r2: ReadableSignalValue<P2>, r3: ReadableSignalValue<P3>) => T): DerivedSignal<T>;
 export function derived<P1 extends ReadableSignalType, P2 extends ReadableSignalType, P3 extends ReadableSignalType, P4 extends ReadableSignalType, T>
-    (r1: P1, r2: P2, r3: P3, r4: P4, calc: (r1: ReadableSignalValue<P1>, r2: ReadableSignalValue<P2>, r3: ReadableSignalValue<P3>, r4: ReadableSignalValue<P4>) => T): ReadableSignal<T>;
+    (r1: P1, r2: P2, r3: P3, r4: P4, calc: (r1: ReadableSignalValue<P1>, r2: ReadableSignalValue<P2>, r3: ReadableSignalValue<P3>, r4: ReadableSignalValue<P4>) => T): DerivedSignal<T>;
 export function derived<P1 extends ReadableSignalType, P2 extends ReadableSignalType, P3 extends ReadableSignalType, P4 extends ReadableSignalType, P5 extends ReadableSignalType, T>
-    (r1: P1, r2: P2, r3: P3, r4: P4, r5: P5, calc: (r1: ReadableSignalValue<P1>, r2: ReadableSignalValue<P2>, r3: ReadableSignalValue<P3>, r4: ReadableSignalValue<P4>, r5: ReadableSignalValue<P5>) => T): ReadableSignal<T>;
-export function derived<P extends ReadableSignalTypes, T>(sources: P, calc: (values: ReadableSignalValues<P>) => T): ReadableSignal<T>
+    (r1: P1, r2: P2, r3: P3, r4: P4, r5: P5, calc: (r1: ReadableSignalValue<P1>, r2: ReadableSignalValue<P2>, r3: ReadableSignalValue<P3>, r4: ReadableSignalValue<P4>, r5: ReadableSignalValue<P5>) => T): DerivedSignal<T>;
+export function derived<P extends ReadableSignalTypes, T>(sources: P, calc: (values: ReadableSignalValues<P>) => T): DerivedSignal<T>
 export function derived(...args: any[]): any {
     if (args.length < 2) throw Error("Expected at least 2 parameters!");
     if (args.length == 2 && Array.isArray(args[0])) {
@@ -86,6 +102,10 @@ export function effect(...args: any[]): any {
     const ee = args.slice(-1)[0] as ((...a:any[]) => void);
     const e = ((a:any[]) => ee(...a)) as Act;
     return asEffect({ d: s, n: MIN_N, f: e });
+}
+
+export function recalculate<P extends DerivedSignalTypes>(derived: P): DerivedSignalValues<P> {
+    return derived.map(x => x()) as DerivedSignalValues<P>;
 }
 
 // Internals
@@ -152,11 +172,11 @@ type Self<T> = {
 
 /** Wrap info in a writable facade */
 function asWritable<T>(node: ValueNode<T>): WritableSignal<T> & Self<ValueNode<T>> {
-    const f = (next?: T): any => {
+    const f = (v?: T): any => {
         const self = f._self;
-        if (next == undefined) return self.v!;
-        if (Object.is(self.v, next)) return;
-        self.v = next;
+        if (v == undefined) return self.v!;
+        if (Object.is(self.v, v)) return;
+        self.v = v;
         self.n = nextN();
     };
     f._self = node;
@@ -173,7 +193,7 @@ function asReadable<T>(node: ValueNode<T>): ReadableSignal<T> & Self<ValueNode<T
 }
 
 /** Wrap info in a derived facade */
-function asDerived<T>(node: DerivedNode<T>): ReadableSignal<T> & Self<DerivedNode<T>> {
+function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> & Self<DerivedNode<T>> {
     const f = (_?: T): any => {
         const self = f._self;
         const cn = currN();
@@ -190,7 +210,6 @@ function asDerived<T>(node: DerivedNode<T>): ReadableSignal<T> & Self<DerivedNod
     f._self = node;
     return f;
 }
-
 
 /** Wrap info in an effect facade */
 function asEffect(node: EffectNode): Effect & Self<EffectNode> {
