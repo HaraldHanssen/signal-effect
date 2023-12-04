@@ -20,53 +20,60 @@ export function readonly<T>(signal: WritableSignal<T>): ReadableSignal<T> {
 
 /** Create a derived/calculated signal from multiple sources */
 export function derived1<TIn, TOut>(source: ReadableSignal<TIn>, calculate: (source: TIn) => TOut): ReadableSignal<TOut> {
-    function create(): DerivedInfo<TOut> {
-        const src = source as GetInfo<TIn>;
-        const d: Calc<TOut> = calculate;
-        const s: SignalInfo<any>[] = [info(src)];
-        return { s, v: 0, t: undefined, d };
-    }
-    const d: DerivedInfo<TOut> = create();
-    return (_?: TOut, info?: true): any => {
-        if (info) return d;
-        const cv = currV();
-        if (cv > d.v) {
-            //Changes has occured. Check dependencies.
-            const m = Math.max(...d.s.map(x => x.v));
-            if (m > d.v) {
-                d.t = d.d(d.s.map(x => x.t));
-            }
-        }
-        d.v = cv;
-        return d.t!;
-    };
+    return asDerived({ s: [(source as unknown as SignalInfoRef<TIn>)._self], v: MIN_V, t: undefined, d: calculate });
 }
 
 // Internals
 // Monotonically increasing version number
-let _version = 0;
-function nextV(): number {
+type VersionType = bigint;
+const MIN_V: VersionType = 0n
+let _version: VersionType = MIN_V;
+function nextV(): VersionType {
     return (++_version);
 }
-function currV(): number {
+function currV(): VersionType {
     return _version;
+}
+
+function maxV(values: VersionType[]): VersionType {
+    let m = MIN_V;
+    for (let i = 0; i < values.length; i++) {
+        const v = values[i];
+        if (v > m) {
+            m = v;
+        }
+    }
+    return m;
 }
 
 /** Signal information */
 type SignalInfo<T> = {
     /** The version number representing the current value */
-    v: number,
+    v: VersionType,
     /** The current value */
     t?: T
 };
+
+/** Reference field is added to the facades */
 type SignalInfoRef<T> = {
     _self: SignalInfo<T>
 }
 
+/** Derived information */
+type DerivedInfo<T> = SignalInfo<T> & {
+    /** The signal sources */
+    s: SignalInfo<any>[]
+    /** The calculate function */
+    d: Calc<T>
+}
+
+/** Calculation signature */
+type Calc<T> = (...args: any[]) => T;
+
+/** Wrap info in a writable facade */
 function asWritable<T>(info: SignalInfo<T>): WritableSignal<T> & SignalInfoRef<T> {
-    const f = (next?: T, info?: boolean): any => {
+    const f = (next?: T): any => {
         const self = f._self;
-        if (info) return self;
         if (next == undefined) return self.t!;
         if (Object.is(self.t, next)) return;
         self.t = next;
@@ -76,31 +83,30 @@ function asWritable<T>(info: SignalInfo<T>): WritableSignal<T> & SignalInfoRef<T
     return f;
 }
 
+/** Wrap info in a readable facade */
 function asReadable<T>(info: SignalInfo<T>): ReadableSignal<T> & SignalInfoRef<T> {
-    const f = (_?: T, info?: boolean): any => {
-        const self = f._self;
-        if (info) return self;
-        return self.t!;
+    const f = (_?: T): any => {
+        return f._self.t!;
     };
     f._self = info;
     return f;
 }
 
-interface GetInfo<T> {
-    (_: undefined, info: true): SignalInfo<T>;
+/** Wrap info in a derived facade */
+function asDerived<T>(info: DerivedInfo<T>): ReadableSignal<T> & SignalInfoRef<T> {
+    const f = (_?: T): any => {
+        const self = f._self;
+        const cv = currV();
+        if (cv > self.v) {
+            //Changes has occured. Check dependencies.
+            const m = maxV(self.s.map(x => x.v));
+            if (m > self.v) {
+                self.t = self.d(self.s.map(x => x.t));
+            }
+        }
+        self.v = cv;
+        return self.t!;
+    };
+    f._self = info;
+    return f;
 }
-
-function info<T>(source: GetInfo<T>): SignalInfo<T> {
-    return source(undefined, true);
-}
-
-/** Derived information */
-type Calc<T> = (...args: any[]) => T;
-type DerivedInfo<T> = SignalInfo<T> & {
-    /** The signal sources */
-    s: SignalInfo<any>[]
-    /** The calculate function */
-    d: Calc<T>
-}
-
-
