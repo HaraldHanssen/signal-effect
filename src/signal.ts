@@ -1,15 +1,18 @@
 /** A readable signal supports reading the current value */
 export interface ReadableSignal<T> {
+    /** Value getter */
     (): T
 }
 
 /** A writable signal supports writing the next value */
 export interface WritableSignal<T> extends ReadableSignal<T> {
+    /** Value setter */
     (next: T): void
 }
 
-/** An effect performs an action depending on one or more sources if they have changed */
+/** An effect performs an action if one or more sources have changed */
 export interface Effect {
+    /** Effect invoker */
     (): void
 }
 
