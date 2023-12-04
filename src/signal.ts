@@ -8,6 +8,18 @@ export interface WritableSignal<T> extends ReadableSignal<T> {
     (next: T): void
 }
 
+/** A readable signal type */
+export type ReadableSignalType = ReadableSignal<any>;
+
+/** A readable signal value */
+export type ReadableSignalValue<T> = T extends ReadableSignal<infer U> ? U : never;
+
+/** One or more readable signals */
+export type ReadableSignals = ReadableSignalType | [ReadableSignalType, ...Array<ReadableSignalType>] | Array<ReadableSignalType>;
+
+/** One or more values from readable signals */
+export type ReadableSignalValues<T> = T extends ReadableSignal<infer U> ? U : { [K in keyof T]: T[K] extends ReadableSignal<infer U> ? U : never };
+
 /** Create a writable signal with the provided initial value */
 export function signal<T>(initial: T): WritableSignal<T> {
     return asWritable({ v: nextV(), t: initial });
@@ -18,10 +30,34 @@ export function readonly<T>(signal: WritableSignal<T>): ReadableSignal<T> {
     return asReadable((signal as unknown as SignalInfoRef<T>)._self);
 }
 
-/** Create a derived/calculated signal from multiple sources */
-export function derived1<TIn, TOut>(source: ReadableSignal<TIn>, calculate: (source: TIn) => TOut): ReadableSignal<TOut> {
-    return asDerived({ s: [(source as unknown as SignalInfoRef<TIn>)._self], v: MIN_V, t: undefined, d: calculate });
+/** Create a derived/calculated signal from one or more sources */
+export function derived<
+    P extends ReadableSignalType,
+    T>(r: P, calculate: (r: ReadableSignalValue<P>) => T): ReadableSignal<T>;
+export function derived<
+    P1 extends ReadableSignalType,
+    P2 extends ReadableSignalType,
+    T>(r1: P1, r2: P2, calculate: (r1: ReadableSignalValue<P1>, r2: ReadableSignalValue<P2>) => T): ReadableSignal<T>;
+export function derived<
+    P1 extends ReadableSignalType,
+    P2 extends ReadableSignalType,
+    P3 extends ReadableSignalType,
+    T>(r1: P1, r2: P2, r3: P3, calculate: (r1: ReadableSignalValue<P1>, r2: ReadableSignalValue<P2>, r3: ReadableSignalValue<P3>) => T): ReadableSignal<T>;
+export function derived(...args: any[]): any {
+    if (args.length < 2) throw Error("Expected at least 2 parameters!");
+    const s = args.slice(0, -1).map(x => (x as unknown as SignalInfoRef<any>)._self);
+    const d = args.slice(-1)[0] as any;
+    return asDerived({ s, v: MIN_V, t: undefined, d });
 }
+
+/** Create a derived/calculated signal from N sources */
+export function derivedN<P extends ReadableSignals, T>(sources: P, calculate: (values: ReadableSignalValues<P>) => T): ReadableSignal<T> {
+    if (Array.isArray(sources)) {
+        return asDerived({ s: sources.map(x => (x as unknown as SignalInfoRef<any>)._self), v: MIN_V, t: undefined, d: calculate });
+    }
+    return asDerived({ s: [(sources as unknown as SignalInfoRef<any>)._self], v: MIN_V, t: undefined, d: calculate });
+}
+
 
 // Internals
 // Monotonically increasing version number
