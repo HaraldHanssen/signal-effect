@@ -131,7 +131,23 @@ export function react(effects: Effect[]): void {
     effects.forEach(x => x.act());
 }
 
+/**
+ * Thrown if user is trying to reenter a get or set method of a signal within an effect or derived function.
+ * All dependent values must be provided upon declaration.
+ */
+export class ReentryError extends Error {
+    constructor(message: string) {
+        super(message);
+        Object.setPrototypeOf(this, ReentryError.prototype);
+    }
+}
+
 // Internals
+// Call tracking
+let denyReentry = false;
+const ERR_READ = "Reading a signal manually within a derived/effect callback is not allowed. Pass the signal as a dependency instead.";
+const ERR_WRITE = "Writing to a signal within a derived/effect callback is not allowed";
+
 // Monotonically increasing version number
 type NumberType = bigint;
 const MIN_N: NumberType = 0n;
@@ -211,6 +227,7 @@ function getValueNode<T>(signal: ReadableSignal<T>): ValueNode<T> {
 function asWritable<T>(node: ValueNode<T>): WritableSignal<T> & Self<ValueNode<T>> {
     const f = (v?: T): any => {
         const self = f._self;
+        if (denyReentry)  throw new ReentryError(v == undefined ? ERR_READ : ERR_WRITE);
         if (v == undefined) return self.v!;
         if (Object.is(self.v, v)) return;
         self.v = v;
@@ -223,6 +240,7 @@ function asWritable<T>(node: ValueNode<T>): WritableSignal<T> & Self<ValueNode<T
 /** Wrap info in a readable facade */
 function asReadable<T>(node: ValueNode<T>): ReadableSignal<T> & Self<ValueNode<T>> {
     const f = (_?: T): any => {
+        if (denyReentry) throw new ReentryError(ERR_READ);
         return f._self.v!;
     };
     f._self = node;
@@ -232,7 +250,14 @@ function asReadable<T>(node: ValueNode<T>): ReadableSignal<T> & Self<ValueNode<T
 /** Wrap info in a derived facade */
 function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> {
     const f = (_?: T): any => {
-        return checkAndCalc(f._self, currN())[0];
+        if (denyReentry) throw new ReentryError(ERR_READ);
+        try {
+            denyReentry = true;
+            return checkAndCalc(f._self, currN())[0];
+        }
+        finally {
+            denyReentry = false;
+        }
     };
     f._self = node;
     return f;
@@ -288,21 +313,27 @@ function checkAndCalc<T>(self: DerivedNode<T>, cn: NumberType): [T, boolean] {
 
 /** Performs a dependency check and acts if it is outdated */
 function checkAndAct(this: EffectNode): void {
-    const cn = currN();
-    if (cn > this.n) {
-        let changed = false;
-        // Changes has occured somewhere. Check if any of the dependencies are affected.
-        const [ values, depChange ] = checkAndCalcDependencies(this, cn);
-
-        changed ||= this.n == MIN_N;
-        changed ||= depChange;
-        if (changed) {
-            // Dependencies have changed or this is a new node. Recalculate.
-            this.f(values);
+    try {
+        denyReentry = true;
+        const cn = currN();
+        if (cn > this.n) {
+            let changed = false;
+            // Changes has occured somewhere. Check if any of the dependencies are affected.
+            const [ values, depChange ] = checkAndCalcDependencies(this, cn);
+    
+            changed ||= this.n == MIN_N;
+            changed ||= depChange;
+            if (changed) {
+                // Dependencies have changed or this is a new node. Recalculate.
+                this.f(values);
+            }
+    
+            // Effect nodes updates the version number each time a change check is performed.
+            // Since dependencies are fixed, this will filter out unneccessary traversals.
+            this.n = cn;
         }
-
-        // Effect nodes updates the version number each time a change check is performed.
-        // Since dependencies are fixed, this will filter out unneccessary traversals.
-        this.n = cn;
+    }
+    finally {
+        denyReentry = false;
     }
 }
