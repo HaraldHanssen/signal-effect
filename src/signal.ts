@@ -186,12 +186,12 @@ function createValueNode<T>(initial: T): ValueNode<T> {
 
 /** Construct a new derived node with the provided dependencies and calculation callback */
 function createDerivedNode<T>(dependencies: ValueNode<any>[], callback: Calc<any>): DerivedNode<T> {
-    return { d: dependencies, n: MIN_N, v: undefined, f: callback };
+    return { n: MIN_N, v: undefined, d: dependencies, f: callback };
 }
 
 /** Construct a new effect node with the provided dependencies and action callback */
 function createEffectNode(dependencies: ValueNode<any>[], callback: Act): EffectNode {
-    return { d: dependencies, n: MIN_N, f: callback };
+    return { n: MIN_N, d: dependencies, f: callback };
 }
 
 /** Get value node from signal */
