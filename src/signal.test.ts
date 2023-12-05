@@ -187,7 +187,7 @@ test("recalculate can do bulk update on N levels derived signals", () => {
     expect(r2[4]).toBe("48:42:4:2:48:2:4:42");
 });
 
-test("recalculate can do bulk update on N levels derived signals", () => {
+test("recalculate can do bulk update on N levels of derived signals", () => {
     let acted = 0;
     let calculated = 0;
     let r1 = "";
@@ -227,4 +227,35 @@ test("recalculate can do bulk update on N levels derived signals", () => {
     expect(calculated).toBe(3); // not called
     expect(r1).toBe("42:4:2:48:2:4:42");
     expect(r2).toBe("42:4:2:48");
+});
+
+test("recalculate on transitive dependency change", () => {
+    let calculated = 0;
+    const s = signal(42);
+    const t = signal(4);
+    const u = signal(2);
+    
+    const a = derived(s, t, (x, y) => {
+        calculated++;
+        return x + y;
+    });
+    const b = derived(u, (x) => {
+        calculated++;
+        return 2 * x;
+    });
+    const c = derived(a, b, (x, y) => {
+        calculated++;
+        return x + y;
+    });
+    expect(calculated).toBe(0);
+    recalc([ c ]);
+    expect(calculated).toBe(3);
+    expect(a()).toBe(42 + 4);
+    expect(b()).toBe(2 * 2);
+    expect(c()).toBe(42 + 4 + 2 * 2);
+    u(3);
+    recalc([ c ]);
+    expect(c()).toBe(42 + 4 + 2 * 3);
+    expect(b()).toBe(2 * 3);
+    expect(a()).toBe(42 + 4);
 });

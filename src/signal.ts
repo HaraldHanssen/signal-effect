@@ -51,7 +51,7 @@ export interface DerivedSignal<T> extends ReadableSignal<T> {
 */
 export interface Effect {
     /** Effect action invoker. Will trigger the action if dependencies have changed. */
-    act(): void //TODO Give it a name so it does not interfere with the signals
+    act(): void
 }
 
 // Convenience definitions to simplify function signatures
@@ -145,17 +145,6 @@ function currN(): NumberType {
     return _currN;
 }
 
-function maxN(values: NumberType[]): NumberType {
-    let m = MIN_N;
-    for (let i = 0; i < values.length; i++) {
-        const v = values[i];
-        if (v > m) {
-            m = v;
-        }
-    }
-    return m;
-}
-
 // Node information
 type Node = {
     /** The version number representing the current value or effect */
@@ -241,9 +230,9 @@ function asReadable<T>(node: ValueNode<T>): ReadableSignal<T> & Self<ValueNode<T
 }
 
 /** Wrap info in a derived facade */
-function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> & Self<DerivedNode<T>> {
+function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> {
     const f = (_?: T): any => {
-        return valueOfDerived(f._self);
+        return checkAndCalc(f._self, currN())[0];
     };
     f._self = node;
     return f;
@@ -251,40 +240,69 @@ function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> & Self<DerivedNode
 
 /** Wrap info in an effect facade */
 function asEffect(node: EffectNode): Effect {
-    function act() {
-        actOn(node);
-    }
-    return { act };
+    return { act : checkAndAct.bind(node) };
 }
 
-/** Performs a dependency check and reacts if necessary */
-function actOn(self: EffectNode): void {
-    const cn = currN();
-    if (cn > self.n) {
-        //Changes has occured. Check dependencies.
-        const m = maxN(self.d.map(x => x.n));
-        if (m == MIN_N || m > self.n) {
-            self.f(self.d.map(x => valueOf(x)));
+/** Check dependent nodes for changes and return their latest values. */
+function checkAndCalcDependencies(self: DependentNode, cn: NumberType): [any[], boolean] {
+    let changed = false;
+    const values = Array.from(self.d, (v, _) => {
+        const node = v as MaybeDerivedNode<any>;
+        if (node.f && node.d) {
+            // DerivedNode
+            const result = checkAndCalc(v as DerivedNode<any>, cn);
+            changed ||= result[1];
+            return result[0];
+        } else {
+            // ValueNode
+            // Compare it to own version. If it is newer then it has changed since we
+            // last visited the "self" node.
+            changed ||= node.n > self.n;
+            return node.v!;
         }
-    }
-    self.n = cn;
+    });
+
+    return [ values, changed ];
 }
 
-/** Gets the value of a derived or value node */
-function valueOf<T>(node: MaybeDerivedNode<T>):T {
-    return node.f && node.d ? valueOfDerived(node as DerivedNode<T>) : node.v!;
-}
-
-/** Get current value of a derived node. Performs a dependency check and recalculates if necessary. */
-function valueOfDerived<T>(self: DerivedNode<T>): T {
-    const cn = currN();
+/** Performs a dependency checks and calculates if it is outdated */
+function checkAndCalc<T>(self: DerivedNode<T>, cn: NumberType): [T, boolean] {
+    let changed = false;
     if (cn > self.n) {
-        //Changes has occured. Check dependencies.
-        const m = maxN(self.d.map(x => x.n));
-        if (m == MIN_N || m > self.n) {
-            self.v = self.f(self.d.map(x => valueOf(x)));
+        // Changes has occured somewhere. Check if any of the dependencies are affected.
+        const [ values, depChange ] = checkAndCalcDependencies(self, cn);
+
+        changed ||= self.n == MIN_N;
+        changed ||= depChange;
+        if (changed) {
+            // Dependencies have changed or this is a new node. Recalculate.
+            self.v = self.f(values);
         }
+
+        // Derived nodes updates the version number each time a change check is performed.
+        // Since dependencies are fixed, this will filter out unneccessary traversals.
+        self.n = cn;
     }
-    self.n = cn;
-    return self.v!;
+    return [self.v!, changed];
+}
+
+/** Performs a dependency check and acts if it is outdated */
+function checkAndAct(this: EffectNode): void {
+    const cn = currN();
+    if (cn > this.n) {
+        let changed = false;
+        // Changes has occured somewhere. Check if any of the dependencies are affected.
+        const [ values, depChange ] = checkAndCalcDependencies(this, cn);
+
+        changed ||= this.n == MIN_N;
+        changed ||= depChange;
+        if (changed) {
+            // Dependencies have changed or this is a new node. Recalculate.
+            this.f(values);
+        }
+
+        // Effect nodes updates the version number each time a change check is performed.
+        // Since dependencies are fixed, this will filter out unneccessary traversals.
+        this.n = cn;
+    }
 }
