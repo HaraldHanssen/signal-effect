@@ -1,48 +1,67 @@
-/** A readable signal supports reading the current value */
+/**
+ * A readable signal supports reading the current value.
+ * 
+ * A readable signal can be a derived signal or a {@link readonly} facade to a 
+ * writable one.
+*/
 export interface ReadableSignal<T> {
     /** Value reader */
     (): T
 }
 
-/** A writable signal supports writing the next value */
+/**
+ * A writable signal supports writing the next value.
+ * 
+ * Setting a signal will not immediately trigger any derived signals or effects.
+ * 
+ * @see DerivedSignal on when they are calculated.
+*/
 export interface WritableSignal<T> extends ReadableSignal<T> {
     /** Value writer */
     (next: T): void
 }
 
-/** A derived performs a calculation if one or more sources have changed */
+/**
+ * A derived signal performs a calculation if one or more sources have changed.
+ * Either run an array of derived signals in bulk using the {@link recalc} function,
+ * or act on them individually through this interface.
+ * 
+ * No derived signals are run by the library on its own. It is the responsibility of
+ * the library user to keep track of all deriveds and schedule them (e.g. on an
+ * asynchronous task) to run at a convenient point of time.
+ * 
+ * A derived signal will exist as long as there are other derived signals or effects
+ * depending on it. To delete a derived signal, all those depending on it must be
+ * removed as well.
+*/
 export interface DerivedSignal<T> extends ReadableSignal<T> {
 }
 
-/** An effect performs an action if one or more sources have changed */
+/**
+ * An effect performs an action if one or more sources have changed.
+ * Either run an array of effects in bulk using the {@link react} function,
+ * or act on them individually through this interface.
+ * 
+ * No effects are run by the library on its own. It is the responsibility of
+ * the library user to keep track of all effects and schedule them (e.g. on an
+ * asynchronous task) to run at a convenient point of time.
+ * 
+ * An effect is a leaf node in the signal system. To delete an effect, remove
+ * the reference(s) to it and it will be gc'ed.
+*/
 export interface Effect {
-    /** Effect invoker */
-    (): void //TODO Give it a name so it does not interfere with the signals
+    /** Effect action invoker. Will trigger the action if dependencies have changed. */
+    act(): void //TODO Give it a name so it does not interfere with the signals
 }
 
-/** A readable signal type */
-export type ReadableSignalType = ReadableSignal<any>;
-
-/** A readable signal value */
-export type ReadableSignalValue<T> = T extends ReadableSignal<infer U> ? U : never;
-
-/** Array of readable signals */
-export type ReadableSignalTypes = [ReadableSignalType, ...Array<ReadableSignalType>] | Array<ReadableSignalType>;
-
-/** Array of values from readable signals */
-export type ReadableSignalValues<T> = { [K in keyof T]: T[K] extends ReadableSignal<infer U> ? U : never };
-
-/** A derived signal type */
-export type DerivedSignalType = DerivedSignal<any>;
-
-/** A derived signal value */
-export type DerivedSignalValue<T> = T extends DerivedSignal<infer U> ? U : never;
-
-/** Array of derived signals */
-export type DerivedSignalTypes = [DerivedSignalType, ...Array<DerivedSignalType>] | Array<DerivedSignalType>;
-
-/** Array of values from derived signals */
-export type DerivedSignalValues<T> = { [K in keyof T]: T[K] extends DerivedSignal<infer U> ? U : never };
+// Convenience definitions to simplify function signatures
+type ReadableSignalType = ReadableSignal<any>;
+type ReadableSignalValue<T> = T extends ReadableSignal<infer U> ? U : never;
+type ReadableSignalTypes = [ReadableSignalType, ...Array<ReadableSignalType>] | Array<ReadableSignalType>;
+type ReadableSignalValues<T> = { [K in keyof T]: T[K] extends ReadableSignal<infer U> ? U : never };
+type DerivedSignalType = DerivedSignal<any>;
+type DerivedSignalTypes = [DerivedSignalType, ...Array<DerivedSignalType>] | Array<DerivedSignalType>;
+type DerivedSignalValues<T> = { [K in keyof T]: T[K] extends DerivedSignal<infer U> ? U : never };
 
 /** Create a writable signal with the provided initial value */
 export function signal<T>(initial: T): WritableSignal<T> {
@@ -109,7 +128,7 @@ export function recalc<P extends DerivedSignalTypes>(derived: P): DerivedSignalV
  * Use this method at the appropriate time when these effects should occur.
 */
 export function react(effects: Effect[]): void {
-    effects.forEach(x => x());
+    effects.forEach(x => x.act());
 }
 
 // Internals
@@ -231,12 +250,11 @@ function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> & Self<DerivedNode
 }
 
 /** Wrap info in an effect facade */
-function asEffect(node: EffectNode): Effect & Self<EffectNode> {
-    const f = (): void => {
-        actOn(f._self);
-    };
-    f._self = node;
-    return f;
+function asEffect(node: EffectNode): Effect {
+    function act() {
+        actOn(node);
+    }
+    return { act };
 }
 
 /** Performs a dependency check and reacts if necessary */

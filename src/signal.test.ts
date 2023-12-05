@@ -91,13 +91,13 @@ test("effect of signal", () => {
         acted++;
     });
     expect(acted).toBe(0);
-    e();
+    e.act();
     expect(acted).toBe(1);
     s(43);
     expect(acted).toBe(1);
-    e();
+    e.act();
     expect(acted).toBe(2);
-    e();
+    e.act();
     expect(acted).toBe(2);
 });
 test("effect of N signals", () => {
@@ -110,15 +110,15 @@ test("effect of N signals", () => {
         expect(x).not.toEqual(y);
         acted++;
     });
-    e();
+    e.act();
     expect(acted).toBe(1);
     t(3);
-    e();
+    e.act();
     expect(acted).toBe(2);
     s(41);
-    e();
+    e.act();
     expect(acted).toBe(3);
-    e();
+    e.act();
     expect(acted).toBe(3);
 });
 test("effect is only affected by dependent signals", () => {
@@ -132,16 +132,16 @@ test("effect is only affected by dependent signals", () => {
         expect(x).not.toEqual(y);
         acted++;
     });
-    e();
+    e.act();
     expect(acted).toBe(1);
     t(3);
-    e();
+    e.act();
     expect(acted).toBe(1); // not called
     s(43);
-    e();
+    e.act();
     expect(acted).toBe(2);
     u(1);
-    e();
+    e.act();
     expect(acted).toBe(3);
 });
 
