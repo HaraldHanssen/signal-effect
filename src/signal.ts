@@ -46,12 +46,12 @@ export type DerivedSignalValues<T> = { [K in keyof T]: T[K] extends DerivedSigna
 
 /** Create a writable signal with the provided initial value */
 export function signal<T>(initial: T): WritableSignal<T> {
-    return asWritable({ n: nextN(), v: initial });
+    return asWritable(createValueNode(initial));
 }
 
 /** Create a read only signal from an existing signal */
 export function readonly<T>(signal: WritableSignal<T>): ReadableSignal<T> {
-    return asReadable((signal as unknown as Self<ValueNode<T>>)._self);
+    return asReadable(getValueNode(signal));
 }
 
 /** Create a derived/calculated signal from one or more sources */
@@ -68,15 +68,11 @@ export function derived<P extends ReadableSignalTypes, T>(sources: P, calc: (val
 export function derived(...args: any[]): any {
     if (args.length < 2) throw Error("Expected at least 2 parameters!");
     if (args.length == 2 && Array.isArray(args[0])) {
-        const s = args[0].map(x => (x as unknown as Self<any>)._self);
-        const d = args.slice(-1)[0] as Calc<any>;
-        return asDerived({ d: s, n: MIN_N, v: undefined, f: d });
+        return asDerived(createDerivedNode(args[0].map(x => getValueNode(x)), args.slice(-1)[0]));
     }
 
-    const s = args.slice(0, -1).map(x => (x as unknown as Self<any>)._self);
     const dd = args.slice(-1)[0] as ((...a:any[]) => any);
-    const d = ((a:any[]) => dd(...a)) as Calc<any>;
-    return asDerived({ d: s, n: MIN_N, v: undefined, f: d });
+    return asDerived(createDerivedNode(args.slice(0, -1).map(x => getValueNode(x)), ((a:any[]) => dd(...a))));
 }
 
 /** Create an effect/action from one or more sources */
@@ -93,22 +89,18 @@ export function effect<P extends ReadableSignalTypes>(sources: P, act: (values: 
 export function effect(...args: any[]): any {
     if (args.length < 2) throw Error("Expected at least 2 parameters!");
     if (args.length == 2 && Array.isArray(args[0])) {
-        const s = args[0].map(x => (x as unknown as Self<any>)._self);
-        const e = args.slice(-1)[0] as Act;
-        return asEffect({ d: s, n: MIN_N, f: e });
+        return asEffect(createEffectNode(args[0].map(x => getValueNode(x)),args.slice(-1)[0]));
     }
 
-    const s = args.slice(0, -1).map(x => (x as unknown as Self<any>)._self);
     const ee = args.slice(-1)[0] as ((...a:any[]) => void);
-    const e = ((a:any[]) => ee(...a)) as Act;
-    return asEffect({ d: s, n: MIN_N, f: e });
+    return asEffect(createEffectNode(args.slice(0, -1).map(x => getValueNode(x)),((a:any[]) => ee(...a))));
 }
 
 /**
  * Perform bulk recalculation run of the provided signals. Only changed signals are propagated through. 
  * Use this method at the appropriate time when these updates should occur.
 */
-export function recalculate<P extends DerivedSignalTypes>(derived: P): DerivedSignalValues<P> {
+export function recalc<P extends DerivedSignalTypes>(derived: P): DerivedSignalValues<P> {
     return derived.map(x => x()) as DerivedSignalValues<P>;
 }
 
@@ -123,7 +115,7 @@ export function react(effects: Effect[]): void {
 // Internals
 // Monotonically increasing version number
 type NumberType = bigint;
-const MIN_N: NumberType = 0n
+const MIN_N: NumberType = 0n;
 let _currN: NumberType = MIN_N;
 
 function nextN(): NumberType {
@@ -187,6 +179,26 @@ type Self<T> = {
     _self: T
 };
 
+/** Construct a new value node for source signals */
+function createValueNode<T>(initial: T): ValueNode<T> {
+    return { n: nextN(), v: initial };
+}
+
+/** Construct a new derived node with the provided dependencies and calculation callback */
+function createDerivedNode<T>(dependencies: ValueNode<any>[], callback: Calc<any>): DerivedNode<T> {
+    return { d: dependencies, n: MIN_N, v: undefined, f: callback };
+}
+
+/** Construct a new effect node with the provided dependencies and action callback */
+function createEffectNode(dependencies: ValueNode<any>[], callback: Act): EffectNode {
+    return { d: dependencies, n: MIN_N, f: callback };
+}
+
+/** Get value node from signal */
+function getValueNode<T>(signal: ReadableSignal<T>): ValueNode<T> {
+    return (signal as unknown as Self<ValueNode<T>>)._self;
+}
+
 /** Wrap info in a writable facade */
 function asWritable<T>(node: ValueNode<T>): WritableSignal<T> & Self<ValueNode<T>> {
     const f = (v?: T): any => {
@@ -212,7 +224,7 @@ function asReadable<T>(node: ValueNode<T>): ReadableSignal<T> & Self<ValueNode<T
 /** Wrap info in a derived facade */
 function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> & Self<DerivedNode<T>> {
     const f = (_?: T): any => {
-        return valueDerived(f._self);
+        return valueOfDerived(f._self);
     };
     f._self = node;
     return f;
@@ -221,17 +233,32 @@ function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> & Self<DerivedNode
 /** Wrap info in an effect facade */
 function asEffect(node: EffectNode): Effect & Self<EffectNode> {
     const f = (): void => {
-        doEffect(f._self);
+        actOn(f._self);
     };
     f._self = node;
     return f;
 }
 
-function valueOf<T>(node: MaybeDerivedNode<T>):T {
-    return node.f && node.d ? valueDerived(node as DerivedNode<T>) : node.v!;
+/** Performs a dependency check and reacts if necessary */
+function actOn(self: EffectNode): void {
+    const cn = currN();
+    if (cn > self.n) {
+        //Changes has occured. Check dependencies.
+        const m = maxN(self.d.map(x => x.n));
+        if (m == MIN_N || m > self.n) {
+            self.f(self.d.map(x => valueOf(x)));
+        }
+    }
+    self.n = cn;
 }
 
-function valueDerived<T>(self: DerivedNode<T>): T {
+/** Gets the value of a derived or value node */
+function valueOf<T>(node: MaybeDerivedNode<T>):T {
+    return node.f && node.d ? valueOfDerived(node as DerivedNode<T>) : node.v!;
+}
+
+/** Get current value of a derived node. Performs a dependency check and recalculates if necessary. */
+function valueOfDerived<T>(self: DerivedNode<T>): T {
     const cn = currN();
     if (cn > self.n) {
         //Changes has occured. Check dependencies.
@@ -242,16 +269,4 @@ function valueDerived<T>(self: DerivedNode<T>): T {
     }
     self.n = cn;
     return self.v!;
-}
-
-function doEffect(self: EffectNode): void {
-    const cn = currN();
-    if (cn > self.n) {
-        //Changes has occured. Check dependencies.
-        const m = maxN(self.d.map(x => x.n));
-        if (m == MIN_N || m > self.n) {
-            self.f(self.d.map(x => valueOf(x)));
-        }
-    }
-    self.n = cn;
 }

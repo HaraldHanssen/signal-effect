@@ -1,4 +1,4 @@
-import { derived, effect, react, readonly, recalculate, signal } from "./signal";
+import { derived, effect, react, readonly, recalc, signal } from "./signal";
 
 test("get signal value", () => {
     const s = signal(42);
@@ -171,14 +171,14 @@ test("recalculate can do bulk update on N levels derived signals", () => {
         return `${x}:${y}`;
     });
     expect(calculated).toBe(0);
-    const r1 = recalculate([a, b, c, d, e]);
+    const r1 = recalc([a, b, c, d, e]);
     expect(calculated).toBe(5);
     expect(r1[0]).toBe("42:4:2");
     expect(r1[1]).toBe(48);
     expect(r1[2]).toBe("2:4:42");
     expect(r1[3]).toBe("42:4:2:48:2:4:42");
     expect(r1[4]).toBe("48:42:4:2:48:2:4:42");
-    const r2 = recalculate([a, b, c, d, e]);
+    const r2 = recalc([a, b, c, d, e]);
     expect(calculated).toBe(5); // not called
     expect(r2[0]).toBe("42:4:2");
     expect(r2[1]).toBe(48);
