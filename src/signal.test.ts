@@ -367,3 +367,8 @@ test("deny reentry in effect actions", () => {
         expect(justCalc()).toBe(i); // Not denied
     }
 });
+test("deny readonly wrapping of a derived signal", () => {
+    const s = signal(42);
+    const a = derived(s, (x) => x);
+    expect(() => readonly(a)).toThrow(Error);
+});

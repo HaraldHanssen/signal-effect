@@ -63,10 +63,6 @@ type ReadableSignalValue<T> = T extends ReadableSignal<infer U> ? U : never;
 type ReadableSignalTypes = [ReadableSignalType, ...Array<ReadableSignalType>] | Array<ReadableSignalType>;
 type ReadableSignalValues<T> = { [K in keyof T]: T[K] extends ReadableSignal<infer U> ? U : never };
 
-type DerivedSignalType = DerivedSignal<any>;
-type DerivedSignalTypes = [DerivedSignalType, ...Array<DerivedSignalType>] | Array<DerivedSignalType>;
-type DerivedSignalValues<T> = { [K in keyof T]: T[K] extends DerivedSignal<infer U> ? U : never };
-
 /** Create a single writable signal with the provided initial value. */
 export function signal<T>(initial: T): WritableSignal<T> {
     return asWritable(createValueNode(initial));
@@ -198,17 +194,12 @@ type ValueNode<T> = Node & {
 
 type DerivedNode<T> = ValueNode<T> & DependentNode & {
     /** The calculation function to execute when dependencies change */
-    f: Calc<T>
+    c: Calc<T>
 };
-
-type MaybeDerivedNode<T> = ValueNode<T> & {
-    d?: ValueNode<any>[]
-    f?: Calc<T>
-}
 
 type EffectNode = DependentNode & {
     /** The action function to execute when dependencies change */
-    f: Act
+    a: Act
 };
 
 /** Calculation signature */
@@ -229,12 +220,12 @@ function createValueNode<T>(initial: T): ValueNode<T> {
 
 /** Construct a new derived node with the provided dependencies and calculation callback */
 function createDerivedNode<T>(dependencies: ValueNode<any>[], callback: Calc<any>): DerivedNode<T> {
-    return { n: MIN_N, v: undefined, d: dependencies, f: callback };
+    return { n: MIN_N, v: undefined, d: dependencies, c: callback };
 }
 
 /** Construct a new effect node with the provided dependencies and action callback */
 function createEffectNode(dependencies: ValueNode<any>[], callback: Act): EffectNode {
-    return { n: MIN_N, d: dependencies, f: callback };
+    return { n: MIN_N, d: dependencies, a: callback };
 }
 
 /** Get value node from signal */
@@ -251,6 +242,7 @@ function asWritable<T>(node: ValueNode<T>): WritableSignal<T> & Self<ValueNode<T
 
 /** Wrap info in a readable facade */
 function asReadable<T>(node: ValueNode<T>): ReadableSignal<T> & Self<ValueNode<T>> {
+    if(isDerivedNode(node) || isEffectNode(node)) throw Error("Expected a writable node.");
     const f = getValue.bind(node) as ReadableSignal<T> & Self<ValueNode<T>>;
     f._self = node;
     return f;
@@ -265,25 +257,34 @@ function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> & Self<DerivedNode
 
 /** Wrap info in an effect facade */
 function asEffect(node: EffectNode): Effect {
-    return actEffectNode.bind(node);
+    let f = actEffectNode.bind(node) as Effect & Self<EffectNode>;
+    f._self = node;
+    return f;
+}
+
+function isDerivedNode(node: Partial<DerivedNode<any>>) {
+    return node.c && node.d;
+}
+
+function isEffectNode(node: Partial<EffectNode>) {
+    return node.a && node.d;
 }
 
 /** Check dependent nodes for changes and return their latest values. */
 function checkDependentNode(self: DependentNode, cn: NumberType): [any[], boolean] {
     let changed = false;
-    const values = Array.from(self.d, (v, _) => {
-        const node = v as MaybeDerivedNode<any>;
-        if (node.f && node.d) {
+    const values = Array.from(self.d, (n, _) => {
+        if (isDerivedNode(n)) {
             // DerivedNode
-            const result = checkDerivedNode(v as DerivedNode<any>, cn);
+            const result = checkDerivedNode(n as DerivedNode<any>, cn);
             changed ||= result[1];
             return result[0];
         } else {
             // ValueNode
             // Compare it to own version. If it is newer then it has changed since we
             // last visited the "self" node.
-            changed ||= node.n > self.n;
-            return node.v!;
+            changed ||= n.n > self.n;
+            return n.v!;
         }
     });
 
@@ -301,7 +302,7 @@ function checkDerivedNode<T>(self: DerivedNode<T>, cn: NumberType): [T, boolean]
         changed ||= depChange;
         if (changed) {
             // Dependencies have changed or this is a new node. Recalculate.
-            self.v = self.f(values);
+            self.v = self.c(values);
         }
 
         // Derived nodes updates the version number each time a change check is performed.
@@ -321,8 +322,8 @@ function checkEffectNode(self: EffectNode, cn: NumberType): void {
         changed ||= self.n == MIN_N;
         changed ||= depChange;
         if (changed) {
-            // Dependencies have changed or this is a new node. Recalculate.
-            self.f(values);
+            // Dependencies have changed or this is a new node. React.
+            self.a(values);
         }
 
         // Effect nodes updates the version number each time a change check is performed.
