@@ -21,7 +21,7 @@
  * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
  * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-import { ReentryError, propup, derived, effect, readonly, signal, signals, update, resume, suspend, SuspendError } from "./signal";
+import { ReentryError, propup, derived, effect, readonly, signal, signals, update, resume, suspend, SuspendError, SignalError } from "./signal";
 
 function suspendCalc(f:() => void):void {
     try {
@@ -418,7 +418,7 @@ test("deny reentry in effect actions", () => {
 test("deny readonly wrapping of a derived signal", () => {
     const s = signal(42);
     const a = derived(s, (x) => x);
-    expect(() => readonly(a as any)).toThrow(Error);
+    expect(() => readonly(a as any)).toThrow(SignalError);
 });
 
 test("allow writable to be transformed to a property", () => {
@@ -445,7 +445,7 @@ test("allow derived to be transformed to a property", () => {
 });
 test("deny effect to be transformed to a property", () => {
     const s = signal(42);
-    expect(() => propup({}, "signal", effect(s, () => {}))).toThrow(Error);
+    expect(() => propup({}, "signal", effect(s, () => {}))).toThrow(SignalError);
 });
 
 test("allow reading and writing to signals in suspended mode", () => {

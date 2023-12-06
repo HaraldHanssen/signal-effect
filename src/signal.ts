@@ -134,7 +134,7 @@ export function derived<P1 extends ReadableSignalType, P2 extends ReadableSignal
     (r1: P1, r2: P2, r3: P3, r4: P4, r5: P5, calc: (r1: ReadableSignalValue<P1>, r2: ReadableSignalValue<P2>, r3: ReadableSignalValue<P3>, r4: ReadableSignalValue<P4>, r5: ReadableSignalValue<P5>) => T): DerivedSignal<T>;
 export function derived<P extends ReadableSignalTypes, T>(sources: P, calc: (values: ReadableSignalValues<P>) => T): DerivedSignal<T>
 export function derived(...args: any[]): any {
-    if (args.length < 2) throw Error("Expected at least 2 parameters!");
+    if (args.length < 2) throw new SignalError("Expected at least 2 parameters!");
     if (args.length == 2 && Array.isArray(args[0])) {
         return asDerived(createDerivedNode(args[0].map(x => extractValueNode(x)), args.slice(-1)[0]));
     }
@@ -164,7 +164,7 @@ export function effect<P1 extends ReadableSignalType, P2 extends ReadableSignalT
     (r1: P1, r2: P2, r3: P3, r4: P4, r5: P5, act: (r1: ReadableSignalValue<P1>, r2: ReadableSignalValue<P2>, r3: ReadableSignalValue<P3>, r4: ReadableSignalValue<P4>, r5: ReadableSignalValue<P5>) => void): Effect;
 export function effect<P extends ReadableSignalTypes>(sources: P, act: (values: ReadableSignalValues<P>) => void): Effect
 export function effect(...args: any[]): any {
-    if (args.length < 2) throw Error("Expected at least 2 parameters!");
+    if (args.length < 2) throw new SignalError("Expected at least 2 parameters!");
     if (args.length == 2 && Array.isArray(args[0])) {
         return asEffect(createEffectNode(args[0].map(x => extractValueNode(x)), args.slice(-1)[0]));
     }
@@ -178,13 +178,13 @@ export function propup<O, P extends PropertyKey, T>(o: O, p: P, s: WritableSigna
 export function propup<O, P extends PropertyKey, T>(o: O, p: P, s: ReadableSignal<T>): (O | {}) & ReadonlyProperty<P, T>;
 export function propup(o: any, p: any, s: any): any {
     const node = extractValueNode(s) as ValueNode<any>;
-    if (isEffectNode(node)) throw Error("Expected a writable, readable, or derived signal.");
+    if (isEffectNode(node)) throw new SignalError("Expected a writable, readable, or derived signal.");
     return Object.defineProperty(o ?? {}, p, extractWrite(s) ? { get: s, set: s } : { get: s });
 }
 
 /**
  * Perform bulk update of the provided signals/effects. Only changed signals are propagated through.
- * Use this method at the appropriate time when these updates should occur.
+ * Use this method at the appropriate time when these updates should occur. See {@link suspend} for more info.
  */
 export function update(items: Effect[] | DerivedSignal<any>[]) {
     items.forEach(x => x());
@@ -224,7 +224,7 @@ export function resume() {
 /**
  * Base class for all signal related errors.
  */
-export abstract class SignalError extends Error {
+export class SignalError extends Error {
     constructor(message: string) {
         super(message);
         Object.setPrototypeOf(this, SignalError.prototype);
@@ -235,7 +235,7 @@ export abstract class SignalError extends Error {
  * Thrown if user is trying to reenter a get or set method of a signal within an effect or derived function.
  * All dependent values must be provided upon declaration.
  */
-export class ReentryError extends Error {
+export class ReentryError extends SignalError {
     constructor(message: string) {
         super(message);
         Object.setPrototypeOf(this, ReentryError.prototype);
@@ -245,7 +245,7 @@ export class ReentryError extends Error {
 /**
  * Thrown if user is trying to execute an effect at a time where execution is suspended.
  */
-export class SuspendError extends Error {
+export class SuspendError extends SignalError {
     constructor(message: string) {
         super(message);
         Object.setPrototypeOf(this, SuspendError.prototype);
@@ -353,7 +353,7 @@ function asWritable<T>(node: ValueNode<T>): WritableSignal<T> & Meta<ValueNode<T
 
 /** Wrap info in a readable facade */
 function asReadable<T>(node: ValueNode<T>): ReadableSignal<T> & Meta<ValueNode<T>> {
-    if (isDerivedNode(node) || isEffectNode(node)) throw Error("Expected a writable signal.");
+    if (isDerivedNode(node) || isEffectNode(node)) throw new SignalError("Expected a writable signal.");
     const f = getValue.bind(node) as ReadableSignal<T> & Meta<ValueNode<T>>;
     Object.defineProperty(f, "_self", { value: node, writable: false });
     return f;
