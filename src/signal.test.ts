@@ -1,4 +1,4 @@
-import { ReentryError, derived, effect, react, readonly, recalc, signal } from "./signal";
+import { ReentryError, derived, effect, react, readonly, recalc, signal, signals } from "./signal";
 
 test("get signal value", () => {
     const s = signal(42);
@@ -38,8 +38,7 @@ test("calc derived value of 1 signal", () => {
 });
 test("calc derived value of 2 signals", () => {
     let calculated = 0;
-    const s = signal(42);
-    const t = signal(4);
+    const [s, t] = signals(42, 4);
     const d = derived(s, t, (x, y) => {
         expect(x).toBeDefined();
         expect(y).toBeDefined();
@@ -60,8 +59,7 @@ test("calc derived value of 2 signals", () => {
 });
 test("calc derived value of [N] signals ", () => {
     let calculated = 0;
-    const s = signal(42);
-    const t = signal(4);
+    const [s, t] = signals(42, 4);
     const d = derived([s, t], ([x, y]) => {
         expect(x).toBeDefined();
         expect(y).toBeDefined();
@@ -82,9 +80,7 @@ test("calc derived value of [N] signals ", () => {
 });
 test("calc derived value is only triggered by dependent signals", () => {
     let calculated = 0;
-    const s = signal(42);
-    const t = signal(4);
-    const u = signal(2);
+    const [s, t, u] = signals(42, 4, 2);
     const d = derived(s, u, (x, y) => {
         expect(x).toBeDefined();
         expect(y).toBeDefined();
@@ -124,8 +120,7 @@ test("act effect of 1 signal", () => {
 });
 test("act effect of 2 signals", () => {
     let acted = 0;
-    const s = signal(42);
-    const t = signal(4);
+    const [s, t] = signals(42, 4);
     const e = effect([s, t], ([x, y]) => {
         expect(x).toBeDefined();
         expect(y).toBeDefined();
@@ -145,8 +140,7 @@ test("act effect of 2 signals", () => {
 });
 test("act effect of [N] signals", () => {
     let acted = 0;
-    const s = signal(42);
-    const t = signal(4);
+    const [s, t] = signals(42, 4);
     const e = effect([s, t], ([x, y]) => {
         expect(x).toBeDefined();
         expect(y).toBeDefined();
@@ -166,9 +160,7 @@ test("act effect of [N] signals", () => {
 });
 test("act effect is only triggered by dependent signals", () => {
     let acted = 0;
-    const s = signal(42);
-    const t = signal(4);
-    const u = signal(2);
+    const [s, t, u] = signals(42, 4, 2);
     const e = effect(s, u, (x, y) => {
         expect(x).toBeDefined();
         expect(y).toBeDefined();
@@ -190,9 +182,7 @@ test("act effect is only triggered by dependent signals", () => {
 
 test("recalc will only trigger once per provided element", () => {
     let calculated = 0;
-    const s = signal(42);
-    const t = signal(4);
-    const u = signal(2);
+    const [s, t, u] = signals(42, 4, 2);
     const a = derived(s, t, u, (x, y, z) => {
         calculated++;
         return `${x}:${y}:${z}`;
@@ -231,10 +221,8 @@ test("recalc will only trigger once per provided element", () => {
 });
 test("recalc will trigger for transitive dependency change", () => {
     let calculated = 0;
-    const s = signal(42);
-    const t = signal(4);
-    const u = signal(2);
-    
+    const [s, t, u] = signals(42, 4, 2);
+
     const a = derived(s, t, (x, y) => {
         calculated++;
         return x + y;
@@ -248,13 +236,13 @@ test("recalc will trigger for transitive dependency change", () => {
         return x + y;
     });
     expect(calculated).toBe(0);
-    recalc([ c ]);
+    recalc([c]);
     expect(calculated).toBe(3);
     expect(a()).toBe(42 + 4);
     expect(b()).toBe(2 * 2);
     expect(c()).toBe(42 + 4 + 2 * 2);
     u(3);
-    recalc([ c ]);
+    recalc([c]);
     expect(calculated).toBe(5); // a is not recalculated
     expect(c()).toBe(42 + 4 + 2 * 3);
     expect(b()).toBe(2 * 3);
@@ -266,9 +254,7 @@ test("react will only trigger once per provided element", () => {
     let calculated = 0;
     let r1 = "";
     let r2 = "";
-    const s = signal(42);
-    const t = signal(4);
-    const u = signal(2);
+    const [s, t, u] = signals(42, 4, 2);
     const a = derived(s, t, u, (x, y, z) => {
         calculated++;
         return `${x}:${y}:${z}`;
@@ -301,6 +287,38 @@ test("react will only trigger once per provided element", () => {
     expect(calculated).toBe(3); // not called
     expect(r1).toBe("42:4:2:48:2:4:42");
     expect(r2).toBe("42:4:2:48");
+});
+test("react will trigger for transitive dependency change", () => {
+    let acted = 0;
+    let calculated = 0;
+    let r1 = 0;
+    const [s, t, u] = signals(42, 4, 2);
+
+    const a = derived(s, t, (x, y) => {
+        calculated++;
+        return x + y;
+    });
+    const b = derived(u, (x) => {
+        calculated++;
+        return 2 * x;
+    });
+    const c = effect(a, b, (x, y) => {
+        acted++;
+        r1 = x + y;
+    });
+    expect(calculated).toBe(0);
+    react([c]);
+    expect(acted).toBe(1);
+    expect(calculated).toBe(2);
+    expect(a()).toBe(42 + 4);
+    expect(b()).toBe(2 * 2);
+    expect(r1).toBe(42 + 4 + 2 * 2);
+    u(3);
+    react([c]);
+    expect(calculated).toBe(3); // a is not recalculated
+    expect(r1).toBe(42 + 4 + 2 * 3);
+    expect(b()).toBe(2 * 3);
+    expect(a()).toBe(42 + 4);
 });
 
 test("deny reentry to signals for derived calculations", () => {

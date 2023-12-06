@@ -54,18 +54,27 @@ export interface Effect {
     act(): void
 }
 
-// Convenience definitions to simplify function signatures
+// Convenience definitions to simplify function signatures using several signals as parameters
+type WritableSignalInitTypes = [any, ...Array<any>] | Array<any>;
+type WritableSignalInitValues<T> = { [K in keyof T]: T[K] extends infer U ? WritableSignal<U> : never };
+
 type ReadableSignalType = ReadableSignal<any>;
 type ReadableSignalValue<T> = T extends ReadableSignal<infer U> ? U : never;
 type ReadableSignalTypes = [ReadableSignalType, ...Array<ReadableSignalType>] | Array<ReadableSignalType>;
 type ReadableSignalValues<T> = { [K in keyof T]: T[K] extends ReadableSignal<infer U> ? U : never };
+
 type DerivedSignalType = DerivedSignal<any>;
 type DerivedSignalTypes = [DerivedSignalType, ...Array<DerivedSignalType>] | Array<DerivedSignalType>;
 type DerivedSignalValues<T> = { [K in keyof T]: T[K] extends DerivedSignal<infer U> ? U : never };
 
-/** Create a writable signal with the provided initial value */
+/** Create a single writable signal with the provided initial value */
 export function signal<T>(initial: T): WritableSignal<T> {
     return asWritable(createValueNode(initial));
+}
+
+/** Create an array of writable signals with the provided initial value */
+export function signals<P extends WritableSignalInitTypes>(...initials: P): WritableSignalInitValues<P> {
+    return initials.map(x => signal(x)) as WritableSignalInitValues<P>;
 }
 
 /** Create a read only signal from an existing signal */
@@ -90,8 +99,8 @@ export function derived(...args: any[]): any {
         return asDerived(createDerivedNode(args[0].map(x => getValueNode(x)), args.slice(-1)[0]));
     }
 
-    const dd = args.slice(-1)[0] as ((...a:any[]) => any);
-    return asDerived(createDerivedNode(args.slice(0, -1).map(x => getValueNode(x)), ((a:any[]) => dd(...a))));
+    const dd = args.slice(-1)[0] as ((...a: any[]) => any);
+    return asDerived(createDerivedNode(args.slice(0, -1).map(x => getValueNode(x)), ((a: any[]) => dd(...a))));
 }
 
 /** Create an effect/action from one or more sources */
@@ -108,11 +117,11 @@ export function effect<P extends ReadableSignalTypes>(sources: P, act: (values: 
 export function effect(...args: any[]): any {
     if (args.length < 2) throw Error("Expected at least 2 parameters!");
     if (args.length == 2 && Array.isArray(args[0])) {
-        return asEffect(createEffectNode(args[0].map(x => getValueNode(x)),args.slice(-1)[0]));
+        return asEffect(createEffectNode(args[0].map(x => getValueNode(x)), args.slice(-1)[0]));
     }
 
-    const ee = args.slice(-1)[0] as ((...a:any[]) => void);
-    return asEffect(createEffectNode(args.slice(0, -1).map(x => getValueNode(x)),((a:any[]) => ee(...a))));
+    const ee = args.slice(-1)[0] as ((...a: any[]) => void);
+    return asEffect(createEffectNode(args.slice(0, -1).map(x => getValueNode(x)), ((a: any[]) => ee(...a))));
 }
 
 /**
@@ -227,7 +236,7 @@ function getValueNode<T>(signal: ReadableSignal<T>): ValueNode<T> {
 function asWritable<T>(node: ValueNode<T>): WritableSignal<T> & Self<ValueNode<T>> {
     const f = (v?: T): any => {
         const self = f._self;
-        if (denyReentry)  throw new ReentryError(v == undefined ? ERR_READ : ERR_WRITE);
+        if (denyReentry) throw new ReentryError(v == undefined ? ERR_READ : ERR_WRITE);
         if (v == undefined) return self.v!;
         if (Object.is(self.v, v)) return;
         self.v = v;
@@ -265,7 +274,7 @@ function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> {
 
 /** Wrap info in an effect facade */
 function asEffect(node: EffectNode): Effect {
-    return { act : checkAndAct.bind(node) };
+    return { act: checkAndAct.bind(node) };
 }
 
 /** Check dependent nodes for changes and return their latest values. */
@@ -287,7 +296,7 @@ function checkAndCalcDependencies(self: DependentNode, cn: NumberType): [any[], 
         }
     });
 
-    return [ values, changed ];
+    return [values, changed];
 }
 
 /** Performs a dependency checks and calculates if it is outdated */
@@ -295,7 +304,7 @@ function checkAndCalc<T>(self: DerivedNode<T>, cn: NumberType): [T, boolean] {
     let changed = false;
     if (cn > self.n) {
         // Changes has occured somewhere. Check if any of the dependencies are affected.
-        const [ values, depChange ] = checkAndCalcDependencies(self, cn);
+        const [values, depChange] = checkAndCalcDependencies(self, cn);
 
         changed ||= self.n == MIN_N;
         changed ||= depChange;
@@ -319,15 +328,15 @@ function checkAndAct(this: EffectNode): void {
         if (cn > this.n) {
             let changed = false;
             // Changes has occured somewhere. Check if any of the dependencies are affected.
-            const [ values, depChange ] = checkAndCalcDependencies(this, cn);
-    
+            const [values, depChange] = checkAndCalcDependencies(this, cn);
+
             changed ||= this.n == MIN_N;
             changed ||= depChange;
             if (changed) {
                 // Dependencies have changed or this is a new node. Recalculate.
                 this.f(values);
             }
-    
+
             // Effect nodes updates the version number each time a change check is performed.
             // Since dependencies are fixed, this will filter out unneccessary traversals.
             this.n = cn;
