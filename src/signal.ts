@@ -79,7 +79,7 @@ export function signals<P extends WritableSignalInitTypes>(...initials: P): Writ
 
 /** Create a read only signal from an existing signal. */
 export function readonly<T>(signal: WritableSignal<T>): ReadableSignal<T> {
-    return asReadable(getValueNode(signal));
+    return asReadable(getSelf(signal));
 }
 
 /** 
@@ -105,11 +105,11 @@ export function derived<P extends ReadableSignalTypes, T>(sources: P, calc: (val
 export function derived(...args: any[]): any {
     if (args.length < 2) throw Error("Expected at least 2 parameters!");
     if (args.length == 2 && Array.isArray(args[0])) {
-        return asDerived(createDerivedNode(args[0].map(x => getValueNode(x)), args.slice(-1)[0]));
+        return asDerived(createDerivedNode(args[0].map(x => getSelf(x)), args.slice(-1)[0]));
     }
 
     const dd = args.slice(-1)[0] as ((...a: any[]) => any);
-    return asDerived(createDerivedNode(args.slice(0, -1).map(x => getValueNode(x)), ((a: any[]) => dd(...a))));
+    return asDerived(createDerivedNode(args.slice(0, -1).map(x => getSelf(x)), ((a: any[]) => dd(...a))));
 }
 
 /** 
@@ -135,11 +135,11 @@ export function effect<P extends ReadableSignalTypes>(sources: P, act: (values: 
 export function effect(...args: any[]): any {
     if (args.length < 2) throw Error("Expected at least 2 parameters!");
     if (args.length == 2 && Array.isArray(args[0])) {
-        return asEffect(createEffectNode(args[0].map(x => getValueNode(x)), args.slice(-1)[0]));
+        return asEffect(createEffectNode(args[0].map(x => getSelf(x)), args.slice(-1)[0]));
     }
 
     const ee = args.slice(-1)[0] as ((...a: any[]) => void);
-    return asEffect(createEffectNode(args.slice(0, -1).map(x => getValueNode(x)), ((a: any[]) => ee(...a))));
+    return asEffect(createEffectNode(args.slice(0, -1).map(x => getSelf(x)), ((a: any[]) => ee(...a))));
 }
 
 /**
@@ -246,51 +246,38 @@ function createEffectNode(dependencies: ValueNode<any>[], callback: Act): Effect
 }
 
 /** Get value node from signal */
-function getValueNode<T>(signal: ReadableSignal<T>): ValueNode<T> {
+function getSelf<T>(signal: ReadableSignal<T>): ValueNode<T> {
     return (signal as unknown as Self<ValueNode<T>>)._self;
 }
 
 /** Wrap info in a writable facade */
 function asWritable<T>(node: ValueNode<T>): WritableSignal<T> & Self<ValueNode<T>> {
-    const f = (v?: T): any => {
-        const self = f._self;
-        if (denyReentry) throw new ReentryError(v == undefined ? ERR_READ : ERR_WRITE);
-        if (v == undefined) return self.v!;
-        if (Object.is(self.v, v)) return;
-        self.v = v;
-        self.n = nextN();
-    };
+    const f = sgetValue.bind(node) as WritableSignal<T> & Self<ValueNode<T>>;
     f._self = node;
     return f;
 }
 
 /** Wrap info in a readable facade */
 function asReadable<T>(node: ValueNode<T>): ReadableSignal<T> & Self<ValueNode<T>> {
-    const f = (_?: T): any => {
-        if (denyReentry) throw new ReentryError(ERR_READ);
-        return f._self.v!;
-    };
+    const f = getValue.bind(node) as ReadableSignal<T> & Self<ValueNode<T>>;
     f._self = node;
     return f;
 }
 
 /** Wrap info in a derived facade */
-function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> {
-    const f = (_?: T): any => {
-        if (denyReentry) throw new ReentryError(ERR_READ);
-        return checkAndCalc(f._self);
-    };
+function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> & Self<DerivedNode<T>> {
+    let f = calcDerivedNode.bind(node) as DerivedSignal<T> & Self<DerivedNode<T>>;
     f._self = node;
     return f;
 }
 
 /** Wrap info in an effect facade */
 function asEffect(node: EffectNode): Effect {
-    return { act: checkAndAct.bind(node) };
+    return { act: actEffectNode.bind(node) };
 }
 
 /** Check dependent nodes for changes and return their latest values. */
-function checkDependencies(self: DependentNode, cn: NumberType): [any[], boolean] {
+function checkDependentNode(self: DependentNode, cn: NumberType): [any[], boolean] {
     let changed = false;
     const values = Array.from(self.d, (v, _) => {
         const node = v as MaybeDerivedNode<any>;
@@ -316,7 +303,7 @@ function checkDerivedNode<T>(self: DerivedNode<T>, cn: NumberType): [T, boolean]
     let changed = false;
     if (cn > self.n) {
         // Changes has occured somewhere. Check if any of the dependencies are affected.
-        const [values, depChange] = checkDependencies(self, cn);
+        const [values, depChange] = checkDependentNode(self, cn);
 
         changed ||= self.n == MIN_N;
         changed ||= depChange;
@@ -337,7 +324,7 @@ function checkEffectNode(self: EffectNode, cn: NumberType): void {
     if (cn > self.n) {
         let changed = false;
         // Changes has occured somewhere. Check if any of the dependencies are affected.
-        const [values, depChange] = checkDependencies(self, cn);
+        const [values, depChange] = checkDependentNode(self, cn);
 
         changed ||= self.n == MIN_N;
         changed ||= depChange;
@@ -352,22 +339,36 @@ function checkEffectNode(self: EffectNode, cn: NumberType): void {
     }
 }
 
-/** 
- * Performs a dependency check and calculates if it is outdated.  
- * 
-*/
-function checkAndCalc<T>(self: DerivedNode<T>): T {
+/** Get value from a readonly value node. */
+function getValue<T>(this: ValueNode<T>, _?:T) : T {
+    if (denyReentry) throw new ReentryError(ERR_READ);
+    return this.v!;
+}
+
+/** Get or set value on a writable value node. */
+function sgetValue<T>(this: ValueNode<T>, v?:T) : T | void {
+    if (denyReentry) throw new ReentryError(v == undefined ? ERR_READ : ERR_WRITE);
+    if (v == undefined) return this.v!;
+    if (Object.is(this.v, v)) return;
+    this.v = v;
+    this.n = nextN();
+}
+
+/**  Performs a dependency check and calculates if it is outdated. Returns the current value. */
+function calcDerivedNode<T>(this: DerivedNode<T>, _?:T): T {
+    if (denyReentry) throw new ReentryError(ERR_READ);
     try {
         denyReentry = true;
-        return checkDerivedNode(self, currN())[0];
+        return checkDerivedNode(this, currN())[0];
     }
     finally {
         denyReentry = false;
     }
 }
 
-/** Performs a dependency check and acts if it is outdated. To avoid feedback loops the function will deny reentry to set or get of signal values.  */
-function checkAndAct(this: EffectNode): void {
+/** Performs a dependency check and acts if it is outdated. */
+function actEffectNode(this: EffectNode): void {
+    if (denyReentry) throw new ReentryError(ERR_READ);
     try {
         denyReentry = true;
         checkEffectNode(this, currN());
