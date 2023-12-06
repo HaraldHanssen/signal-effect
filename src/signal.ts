@@ -51,7 +51,7 @@ export interface DerivedSignal<T> extends ReadableSignal<T> {
 */
 export interface Effect {
     /** Effect action invoker. Will trigger the action if dependencies have changed. */
-    act(): void
+    (): void
 }
 
 // Convenience definitions to simplify function signatures using several signals as parameters
@@ -143,19 +143,11 @@ export function effect(...args: any[]): any {
 }
 
 /**
- * Perform bulk recalculation run of the provided signals. Only changed signals are propagated through. 
+ * Perform bulk update of the provided signals/effects. Only changed signals are propagated through.
  * Use this method at the appropriate time when these updates should occur.
-*/
-export function recalc<P extends DerivedSignalTypes>(derived: P): DerivedSignalValues<P> {
-    return derived.map(x => x()) as DerivedSignalValues<P>;
-}
-
-/**
- * Perform bulk reaction run of the provided effects. Only changed signals are propagated through. 
- * Use this method at the appropriate time when these effects should occur.
-*/
-export function react(effects: Effect[]): void {
-    effects.forEach(x => x.act());
+ */
+export function update(items: Effect[] | DerivedSignal<any>[]) {
+    items.forEach(x => x());
 }
 
 /**
@@ -273,7 +265,7 @@ function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> & Self<DerivedNode
 
 /** Wrap info in an effect facade */
 function asEffect(node: EffectNode): Effect {
-    return { act: actEffectNode.bind(node) };
+    return actEffectNode.bind(node);
 }
 
 /** Check dependent nodes for changes and return their latest values. */

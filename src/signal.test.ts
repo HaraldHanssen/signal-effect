@@ -1,4 +1,4 @@
-import { ReentryError, derived, effect, react, readonly, recalc, signal, signals } from "./signal";
+import { ReentryError, derived, effect, readonly, signal, signals, update } from "./signal";
 
 test("get signal value", () => {
     const s = signal(42);
@@ -109,13 +109,13 @@ test("act effect of 1 signal", () => {
         acted++;
     });
     expect(acted).toBe(0);
-    e.act();
+    e();
     expect(acted).toBe(1);
     s(43);
     expect(acted).toBe(1);
-    e.act();
+    e();
     expect(acted).toBe(2);
-    e.act();
+    e();
     expect(acted).toBe(2);
 });
 test("act effect of 2 signals", () => {
@@ -127,15 +127,15 @@ test("act effect of 2 signals", () => {
         expect(x).not.toEqual(y);
         acted++;
     });
-    e.act();
+    e();
     expect(acted).toBe(1);
     t(3);
-    e.act();
+    e();
     expect(acted).toBe(2);
     s(41);
-    e.act();
+    e();
     expect(acted).toBe(3);
-    e.act();
+    e();
     expect(acted).toBe(3);
 });
 test("act effect of [N] signals", () => {
@@ -147,15 +147,15 @@ test("act effect of [N] signals", () => {
         expect(x).not.toEqual(y);
         acted++;
     });
-    e.act();
+    e();
     expect(acted).toBe(1);
     t(3);
-    e.act();
+    e();
     expect(acted).toBe(2);
     s(41);
-    e.act();
+    e();
     expect(acted).toBe(3);
-    e.act();
+    e();
     expect(acted).toBe(3);
 });
 test("act effect is only triggered by dependent signals", () => {
@@ -167,20 +167,20 @@ test("act effect is only triggered by dependent signals", () => {
         expect(x).not.toEqual(y);
         acted++;
     });
-    e.act();
+    e();
     expect(acted).toBe(1);
     t(3);
-    e.act();
+    e();
     expect(acted).toBe(1); // not called
     s(43);
-    e.act();
+    e();
     expect(acted).toBe(2);
     u(1);
-    e.act();
+    e();
     expect(acted).toBe(3);
 });
 
-test("recalc will only trigger once per provided element", () => {
+test("update of derived will only trigger once per provided element", () => {
     let calculated = 0;
     const [s, t, u] = signals(42, 4, 2);
     const a = derived(s, t, u, (x, y, z) => {
@@ -204,22 +204,22 @@ test("recalc will only trigger once per provided element", () => {
         return `${x}:${y}`;
     });
     expect(calculated).toBe(0);
-    const r1 = recalc([a, b, c, d, e]);
+    update([a, b, c, d, e]);
     expect(calculated).toBe(5);
-    expect(r1[0]).toBe("42:4:2");
-    expect(r1[1]).toBe(48);
-    expect(r1[2]).toBe("2:4:42");
-    expect(r1[3]).toBe("42:4:2:48:2:4:42");
-    expect(r1[4]).toBe("48:42:4:2:48:2:4:42");
-    const r2 = recalc([a, b, c, d, e]);
+    expect(a()).toBe("42:4:2");
+    expect(b()).toBe(48);
+    expect(c()).toBe("2:4:42");
+    expect(d()).toBe("42:4:2:48:2:4:42");
+    expect(e()).toBe("48:42:4:2:48:2:4:42");
+    update([a, b, c, d, e]);
     expect(calculated).toBe(5); // not called
-    expect(r2[0]).toBe("42:4:2");
-    expect(r2[1]).toBe(48);
-    expect(r2[2]).toBe("2:4:42");
-    expect(r2[3]).toBe("42:4:2:48:2:4:42");
-    expect(r2[4]).toBe("48:42:4:2:48:2:4:42");
+    expect(a()).toBe("42:4:2");
+    expect(b()).toBe(48);
+    expect(c()).toBe("2:4:42");
+    expect(d()).toBe("42:4:2:48:2:4:42");
+    expect(e()).toBe("48:42:4:2:48:2:4:42");
 });
-test("recalc will trigger for transitive dependency change", () => {
+test("update of derived will trigger for transitive dependency change", () => {
     let calculated = 0;
     const [s, t, u] = signals(42, 4, 2);
 
@@ -236,20 +236,20 @@ test("recalc will trigger for transitive dependency change", () => {
         return x + y;
     });
     expect(calculated).toBe(0);
-    recalc([c]);
+    update([c]);
     expect(calculated).toBe(3);
     expect(a()).toBe(42 + 4);
     expect(b()).toBe(2 * 2);
     expect(c()).toBe(42 + 4 + 2 * 2);
     u(3);
-    recalc([c]);
+    update([c]);
     expect(calculated).toBe(5); // a is not recalculated
     expect(c()).toBe(42 + 4 + 2 * 3);
     expect(b()).toBe(2 * 3);
     expect(a()).toBe(42 + 4);
 });
 
-test("react will only trigger once per provided element", () => {
+test("update of effect will only trigger once per provided element", () => {
     let acted = 0;
     let calculated = 0;
     let r1 = "";
@@ -277,18 +277,18 @@ test("react will only trigger once per provided element", () => {
     });
     expect(acted).toBe(0);
     expect(calculated).toBe(0);
-    react([d, e]);
+    update([d, e]);
     expect(acted).toBe(2);
     expect(calculated).toBe(3);
     expect(r1).toBe("42:4:2:48:2:4:42");
     expect(r2).toBe("42:4:2:48");
-    react([d, e]);
+    update([d, e]);
     expect(acted).toBe(2); // not called
     expect(calculated).toBe(3); // not called
     expect(r1).toBe("42:4:2:48:2:4:42");
     expect(r2).toBe("42:4:2:48");
 });
-test("react will trigger for transitive dependency change", () => {
+test("update of effect will trigger for transitive dependency change", () => {
     let acted = 0;
     let calculated = 0;
     let r1 = 0;
@@ -307,14 +307,14 @@ test("react will trigger for transitive dependency change", () => {
         r1 = x + y;
     });
     expect(calculated).toBe(0);
-    react([c]);
+    update([c]);
     expect(acted).toBe(1);
     expect(calculated).toBe(2);
     expect(a()).toBe(42 + 4);
     expect(b()).toBe(2 * 2);
     expect(r1).toBe(42 + 4 + 2 * 2);
     u(3);
-    react([c]);
+    update([c]);
     expect(calculated).toBe(3); // a is not recalculated
     expect(r1).toBe(42 + 4 + 2 * 3);
     expect(b()).toBe(2 * 3);
@@ -331,7 +331,7 @@ test("deny reentry in derived calculations", () => {
         return x;
     });
     const enterCalc = derived(s, (_) => justCalc());
-    const enterAct = derived(s, (_) => justAct.act());
+    const enterAct = derived(s, (_) => justAct());
 
     for (let i = 42; i < 45; i++) {
         s(i);
@@ -353,17 +353,17 @@ test("deny reentry in effect actions", () => {
     const enterGet = effect(s, () => s());
     const enterSet = effect(s, () => s(43));
     const enterCalc = effect(s, () => justCalc());
-    const enterAct = effect(s, () => justAct.act());
+    const enterAct = effect(s, () => justAct());
 
     for (let i = 42; i < 45; i++) {
         s(i);
-        expect(enterGet.act).toThrow(ReentryError);
+        expect(enterGet).toThrow(ReentryError);
         expect(justCalc()).toBe(i); // Not denied
-        expect(enterSet.act).toThrow(ReentryError);
+        expect(enterSet).toThrow(ReentryError);
         expect(justCalc()).toBe(i); // Not denied
-        expect(enterCalc.act).toThrow(ReentryError);
+        expect(enterCalc).toThrow(ReentryError);
         expect(justCalc()).toBe(i); // Not denied
-        expect(enterAct.act).toThrow(ReentryError);
+        expect(enterAct).toThrow(ReentryError);
         expect(justCalc()).toBe(i); // Not denied
     }
 });
