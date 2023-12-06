@@ -21,7 +21,7 @@
  * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
  * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-import { ReentryError, propup, derived, effect, readonly, signal, signals, update, resume, suspend } from "./signal";
+import { ReentryError, propup, derived, effect, readonly, signal, signals, update, resume, suspend, SuspendError } from "./signal";
 
 function suspendCalc(f:() => void):void {
     try {
@@ -446,4 +446,28 @@ test("allow derived to be transformed to a property", () => {
 test("deny effect to be transformed to a property", () => {
     const s = signal(42);
     expect(() => propup({}, "signal", effect(s, () => {}))).toThrow(Error);
+});
+
+test("allow reading and writing to signals in suspended mode", () => {
+    const s = signal(42);
+    const initialized = derived(s, (x) => x).init(4);
+    suspendCalc(() => {
+        expect(s()).toBe(42);
+        expect(initialized()).toBe(4);
+        s(44);
+        expect(initialized()).toBe(4);
+    });
+    update([initialized]);
+    expect(initialized()).toBe(44);
+});
+test("deny execution of derived and effects in suspended mode", () => {
+    const s = signal(42);
+    const uninitialized = derived(s, (x) => x);
+    const act = effect(s, () => {});
+    suspendCalc(() => {
+        expect(uninitialized).toThrow(SuspendError);
+        expect(act).toThrow(SuspendError);
+    });
+    expect(uninitialized()).toBe(42);
+    expect(act).not.toThrow(Error);
 });
