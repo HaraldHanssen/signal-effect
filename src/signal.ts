@@ -1,4 +1,28 @@
 /**
+ * @license
+ * Copyright (c) 2023 Harald Hanssen
+
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files (the
+ * "Software"), to deal in the Software without restriction, including
+ * without limitation the rights to use, copy, modify, merge, publish,
+ * distribute, sublicense, and/or sell copies of the Software, and to
+ * permit persons to whom the Software is furnished to do so, subject to
+ * the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+ * LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+ * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+ * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
+/**
  * A readable signal supports reading the current value.
  * 
  * A readable signal can be a derived signal or a {@link readonly} facade to a 
@@ -19,6 +43,7 @@ export interface ReadableSignal<T> {
 export interface WritableSignal<T> extends ReadableSignal<T> {
     /** Value writer */
     (next: T): void,
+    /** Metadata */
     readonly write:true
 }
 
@@ -34,8 +59,11 @@ export interface WritableSignal<T> extends ReadableSignal<T> {
  * A derived signal will exist as long as there are other derived signals or effects
  * depending on it. To delete a derived signal, all those depending on it must be
  * removed as well.
+ * 
+ * Use the @see init method to set an initial value of the derived signal.
 */
 export interface DerivedSignal<T> extends ReadableSignal<T> {
+    init: (v:T) => DerivedSignal<T>
 }
 
 /**
@@ -52,7 +80,9 @@ export interface DerivedSignal<T> extends ReadableSignal<T> {
 */
 export interface Effect {
     /** Effect action invoker. Will trigger the action if dependencies have changed. */
-    (): void
+    (): void,
+    /** Metadata */
+    readonly act:true
 }
 
 // Convenience definitions to simplify function signatures using several signals as parameters
@@ -161,6 +191,47 @@ export function update(items: Effect[] | DerivedSignal<any>[]) {
 }
 
 /**
+ * Suspend execution of derived signals and effects. Will remain suspended to their current state until
+ * resume is called. Use this together with {@link update} to provide a controlled execution environment
+ * for your end user. The repeating sequence can be similar to broad sketch of a ui cycle:
+ * 
+ * (1) suspend execution
+ * (2) get current state of signals
+ *     set new signals
+ *     add signals and effects
+ *     remove signals and effects
+ * (3) resume execution
+ *     update deriveds
+ *     update effects
+ *     update visual elements
+ * (4) layout, render and user input
+ * 
+ * Step (2) is the presentation logic, (1) and (3) the presentation framework and (4) the browser.
+ */
+export function suspend() {
+    if (denyReentry) throw new ReentryError(ERR_REENTRY_READ);
+    suspendExecution = true;
+}
+
+/**
+ * Resumes execution of derived signals and effects. See {@link suspend} for more info.
+ */
+export function resume() {
+    if (denyReentry) throw new ReentryError(ERR_REENTRY_READ);
+    suspendExecution = false;
+}
+
+/**
+ * Base class for all signal related errors.
+ */
+export abstract class SignalError extends Error {
+    constructor(message: string) {
+        super(message);
+        Object.setPrototypeOf(this, SignalError.prototype);
+    }
+}
+
+/**
  * Thrown if user is trying to reenter a get or set method of a signal within an effect or derived function.
  * All dependent values must be provided upon declaration.
  */
@@ -171,11 +242,24 @@ export class ReentryError extends Error {
     }
 }
 
+/**
+ * Thrown if user is trying to execute an effect at a time where execution is suspended.
+ */
+export class SuspendError extends Error {
+    constructor(message: string) {
+        super(message);
+        Object.setPrototypeOf(this, SuspendError.prototype);
+    }
+}
+
 // Internals
 // Call tracking
 let denyReentry = false;
-const ERR_READ = "Reading a signal manually within a derived/effect callback is not allowed. Pass the signal as a dependency instead.";
-const ERR_WRITE = "Writing to a signal within a derived/effect callback is not allowed";
+const ERR_REENTRY_READ = "Reading a signal manually within a derived/effect callback is not allowed. Pass the signal as a dependency instead.";
+const ERR_REENTRY_WRITE = "Writing to a signal within a derived/effect callback is not allowed";
+let suspendExecution = false;
+const ERR_SUSPEND_ACT = "Executing an effect action when execution is suspended is not allowed. ";
+const ERR_SUSPEND_CALC = "Executing a derived calculation when execution is suspended is not allowed. Pass an initial value to the derived signal to avoid this error.";
 
 // Monotonically increasing version number
 type NumberType = bigint;
@@ -223,10 +307,15 @@ type Calc<T> = (args: any[]) => T;
 type Act = (args: any[]) => void;
 
 /** Function metadata */
-type Meta<T> = {
-    /** The reference field that is added to the facades. Same as 'this' inside the methods. */
-    _self: T,
-    write?: boolean
+type Meta<F> = {
+    /** The reference field that is added to the function facades. Same as 'this' inside the methods. */
+    _self: F,
+    /** True if the provided function can be used as a setter */
+    write?: boolean,
+    /** True if the provided function will execute an effect action */
+    act?: boolean,
+    /** Can set an initial value to derived signals */
+    init?: any
 };
 
 /** Construct a new value node for source signals */
@@ -257,8 +346,8 @@ function extractWrite<T>(signal: ReadableSignal<T>): boolean {
 /** Wrap info in a writable facade */
 function asWritable<T>(node: ValueNode<T>): WritableSignal<T> & Meta<ValueNode<T>> {
     const f = sgetValue.bind(node) as WritableSignal<T> & Meta<ValueNode<T>>;
-    f._self = node;
-    f.write = true;
+    Object.defineProperty(f, "_self", { value: node, writable: false });
+    Object.defineProperty(f, "write", { value: true, writable: false });
     return f;
 }
 
@@ -266,21 +355,23 @@ function asWritable<T>(node: ValueNode<T>): WritableSignal<T> & Meta<ValueNode<T
 function asReadable<T>(node: ValueNode<T>): ReadableSignal<T> & Meta<ValueNode<T>> {
     if (isDerivedNode(node) || isEffectNode(node)) throw Error("Expected a writable signal.");
     const f = getValue.bind(node) as ReadableSignal<T> & Meta<ValueNode<T>>;
-    f._self = node;
+    Object.defineProperty(f, "_self", { value: node, writable: false });
     return f;
 }
 
 /** Wrap info in a derived facade */
 function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> & Meta<DerivedNode<T>> {
     let f = calcDerivedNode.bind(node) as DerivedSignal<T> & Meta<DerivedNode<T>>;
-    f._self = node;
+    Object.defineProperty(f, "_self", { value: node, writable: false });
+    Object.defineProperty(f, "init", { value: initValue.bind(node,f), writable: false });
     return f;
 }
 
 /** Wrap info in an effect facade */
-function asEffect(node: EffectNode): Effect {
+function asEffect(node: EffectNode): Effect & Meta<EffectNode> {
     let f = actEffectNode.bind(node) as Effect & Meta<EffectNode>;
-    f._self = node;
+    Object.defineProperty(f, "_self", { value: node, writable: false });
+    Object.defineProperty(f, "act", { value: true, writable: false });
     return f;
 }
 
@@ -356,22 +447,30 @@ function checkEffectNode(self: EffectNode, cn: NumberType): void {
 
 /** Get value from a readonly value node. */
 function getValue<T>(this: ValueNode<T>, _?: T): T {
-    if (denyReentry) throw new ReentryError(ERR_READ);
+    if (denyReentry) throw new ReentryError(ERR_REENTRY_READ);
     return this.v!;
 }
 
 /** Get or set value on a writable value node. */
 function sgetValue<T>(this: ValueNode<T>, v?: T): T | void {
-    if (denyReentry) throw new ReentryError(v == undefined ? ERR_READ : ERR_WRITE);
+    if (denyReentry) throw new ReentryError(v == undefined ? ERR_REENTRY_READ : ERR_REENTRY_WRITE);
     if (v == undefined) return this.v!;
     if (Object.is(this.v, v)) return;
     this.v = v;
     this.n = nextN();
 }
 
+/** Set initial value for derived. */
+function initValue<T,F>(this: DerivedNode<T>, f:F, v:T): F {
+    if (!this.v) this.v = v;
+    return f;
+}
+
 /**  Performs a dependency check and calculates if it is outdated. Returns the current value. */
 function calcDerivedNode<T>(this: DerivedNode<T>, _?: T): T {
-    if (denyReentry) throw new ReentryError(ERR_READ);
+    if (suspendExecution && this.v) return this.v;
+    if (suspendExecution) throw new SuspendError(ERR_SUSPEND_CALC);
+    if (denyReentry) throw new ReentryError(ERR_REENTRY_READ);
     try {
         denyReentry = true;
         return checkDerivedNode(this, currN())[0];
@@ -383,7 +482,8 @@ function calcDerivedNode<T>(this: DerivedNode<T>, _?: T): T {
 
 /** Performs a dependency check and acts if it is outdated. */
 function actEffectNode(this: EffectNode): void {
-    if (denyReentry) throw new ReentryError(ERR_READ);
+    if (suspendExecution) throw new SuspendError(ERR_SUSPEND_ACT);
+    if (denyReentry) throw new ReentryError(ERR_REENTRY_READ);
     try {
         denyReentry = true;
         checkEffectNode(this, currN());

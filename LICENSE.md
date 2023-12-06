@@ -1,4 +1,4 @@
-Copyright (c) 2023- Harald Hanssen
+Copyright (c) 2023 Harald Hanssen
 
 Permission is hereby granted, free of charge, to any person obtaining
 a copy of this software and associated documentation files (the

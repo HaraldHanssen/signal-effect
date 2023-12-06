@@ -1,4 +1,37 @@
-import { ReentryError, propup, derived, effect, readonly, signal, signals, update } from "./signal";
+/**
+ * @license
+ * Copyright (c) 2023 Harald Hanssen
+
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files (the
+ * "Software"), to deal in the Software without restriction, including
+ * without limitation the rights to use, copy, modify, merge, publish,
+ * distribute, sublicense, and/or sell copies of the Software, and to
+ * permit persons to whom the Software is furnished to do so, subject to
+ * the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+ * LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+ * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+ * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+import { ReentryError, propup, derived, effect, readonly, signal, signals, update, resume, suspend } from "./signal";
+
+function suspendCalc(f:() => void):void {
+    try {
+        suspend();
+        f();
+    }
+    finally {
+        resume();
+    }
+}
 
 test("get signal value", () => {
     const s = signal(42);
@@ -18,6 +51,21 @@ test("get readonly value", () => {
     expect(r()).toBe(43);
 });
 
+test("calc derived value can have an initial value", () => {
+    let calculated = 0;
+    const s = signal(42);
+    const d = derived(s, (x) => {
+        expect(x).toBeDefined();
+        calculated++;
+        return 2 * x;
+    }).init(4);
+    suspendCalc(() => {
+        expect(calculated).toBe(0);
+        expect(d()).toBe(4);
+    });
+    expect(calculated).toBe(0);
+    expect(d()).toBe(84);
+});
 test("calc derived value of 1 signal", () => {
     let calculated = 0;
     const s = signal(42);
@@ -25,7 +73,7 @@ test("calc derived value of 1 signal", () => {
         expect(x).toBeDefined();
         calculated++;
         return 2 * x;
-    });
+    })
     expect(calculated).toBe(0);
     expect(d()).toBe(84);
     expect(calculated).toBe(1);
