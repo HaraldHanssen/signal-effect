@@ -18,12 +18,13 @@ export interface ReadableSignal<T> {
 */
 export interface WritableSignal<T> extends ReadableSignal<T> {
     /** Value writer */
-    (next: T): void
+    (next: T): void,
+    readonly write:true
 }
 
 /**
  * A derived signal performs a calculation if one or more sources have changed.
- * Either run an array of derived signals in bulk using the {@link recalc} function,
+ * Either run an array of derived signals in bulk using the {@link update} function,
  * or act on them individually through this interface.
  * 
  * No derived signals are run by the library on its own. It is the responsibility of
@@ -39,7 +40,7 @@ export interface DerivedSignal<T> extends ReadableSignal<T> {
 
 /**
  * An effect performs an action if one or more sources have changed.
- * Either run an array of effects in bulk using the {@link react} function,
+ * Either run an array of effects in bulk using the {@link update} function,
  * or act on them individually through this interface.
  * 
  * No effects are run by the library on its own. It is the responsibility of
@@ -63,6 +64,10 @@ type ReadableSignalValue<T> = T extends ReadableSignal<infer U> ? U : never;
 type ReadableSignalTypes = [ReadableSignalType, ...Array<ReadableSignalType>] | Array<ReadableSignalType>;
 type ReadableSignalValues<T> = { [K in keyof T]: T[K] extends ReadableSignal<infer U> ? U : never };
 
+type ReadonlyProperty<P extends PropertyKey, T> = { readonly [K in P]: T };
+type WritableProperty<P extends PropertyKey, T> = { [K in P]: T };
+
+
 /** Create a single writable signal with the provided initial value. */
 export function signal<T>(initial: T): WritableSignal<T> {
     return asWritable(createValueNode(initial));
@@ -75,7 +80,7 @@ export function signals<P extends WritableSignalInitTypes>(...initials: P): Writ
 
 /** Create a read only signal from an existing signal. */
 export function readonly<T>(signal: WritableSignal<T>): ReadableSignal<T> {
-    return asReadable(getSelf(signal));
+    return asReadable(extractValueNode(signal));
 }
 
 /** 
@@ -101,11 +106,11 @@ export function derived<P extends ReadableSignalTypes, T>(sources: P, calc: (val
 export function derived(...args: any[]): any {
     if (args.length < 2) throw Error("Expected at least 2 parameters!");
     if (args.length == 2 && Array.isArray(args[0])) {
-        return asDerived(createDerivedNode(args[0].map(x => getSelf(x)), args.slice(-1)[0]));
+        return asDerived(createDerivedNode(args[0].map(x => extractValueNode(x)), args.slice(-1)[0]));
     }
 
     const dd = args.slice(-1)[0] as ((...a: any[]) => any);
-    return asDerived(createDerivedNode(args.slice(0, -1).map(x => getSelf(x)), ((a: any[]) => dd(...a))));
+    return asDerived(createDerivedNode(args.slice(0, -1).map(x => extractValueNode(x)), ((a: any[]) => dd(...a))));
 }
 
 /** 
@@ -131,11 +136,20 @@ export function effect<P extends ReadableSignalTypes>(sources: P, act: (values: 
 export function effect(...args: any[]): any {
     if (args.length < 2) throw Error("Expected at least 2 parameters!");
     if (args.length == 2 && Array.isArray(args[0])) {
-        return asEffect(createEffectNode(args[0].map(x => getSelf(x)), args.slice(-1)[0]));
+        return asEffect(createEffectNode(args[0].map(x => extractValueNode(x)), args.slice(-1)[0]));
     }
 
     const ee = args.slice(-1)[0] as ((...a: any[]) => void);
-    return asEffect(createEffectNode(args.slice(0, -1).map(x => getSelf(x)), ((a: any[]) => ee(...a))));
+    return asEffect(createEffectNode(args.slice(0, -1).map(x => extractValueNode(x)), ((a: any[]) => ee(...a))));
+}
+
+/** Transform a signal to become a property on an object. Creates new object if null or undefined. */
+export function propup<O, P extends PropertyKey, T>(o: O, p: P, s: WritableSignal<T>): (O | {}) & WritableProperty<P, T>;
+export function propup<O, P extends PropertyKey, T>(o: O, p: P, s: ReadableSignal<T>): (O | {}) & ReadonlyProperty<P, T>;
+export function propup(o: any, p: any, s: any): any {
+    const node = extractValueNode(s) as ValueNode<any>;
+    if (isEffectNode(node)) throw Error("Expected a writable, readable, or derived signal.");
+    return Object.defineProperty(o ?? {}, p, extractWrite(s) ? { get: s, set: s } : { get: s });
 }
 
 /**
@@ -208,9 +222,11 @@ type Calc<T> = (args: any[]) => T;
 /** Action signature */
 type Act = (args: any[]) => void;
 
-type Self<T> = {
-    /** The reference field that is added to the facades */
-    _self: T
+/** Function metadata */
+type Meta<T> = {
+    /** The reference field that is added to the facades. Same as 'this' inside the methods. */
+    _self: T,
+    write?: boolean
 };
 
 /** Construct a new value node for source signals */
@@ -228,36 +244,42 @@ function createEffectNode(dependencies: ValueNode<any>[], callback: Act): Effect
     return { n: MIN_N, d: dependencies, a: callback };
 }
 
-/** Get value node from signal */
-function getSelf<T>(signal: ReadableSignal<T>): ValueNode<T> {
-    return (signal as unknown as Self<ValueNode<T>>)._self;
+/** Extract value node from signal metadata */
+function extractValueNode<T>(signal: ReadableSignal<T>): ValueNode<T> {
+    return (signal as unknown as Meta<ValueNode<T>>)._self;
+}
+
+/** Extract write flag from signal metadata */
+function extractWrite<T>(signal: ReadableSignal<T>): boolean {
+    return (signal as unknown as Meta<ValueNode<T>>).write ?? false;
 }
 
 /** Wrap info in a writable facade */
-function asWritable<T>(node: ValueNode<T>): WritableSignal<T> & Self<ValueNode<T>> {
-    const f = sgetValue.bind(node) as WritableSignal<T> & Self<ValueNode<T>>;
+function asWritable<T>(node: ValueNode<T>): WritableSignal<T> & Meta<ValueNode<T>> {
+    const f = sgetValue.bind(node) as WritableSignal<T> & Meta<ValueNode<T>>;
     f._self = node;
+    f.write = true;
     return f;
 }
 
 /** Wrap info in a readable facade */
-function asReadable<T>(node: ValueNode<T>): ReadableSignal<T> & Self<ValueNode<T>> {
-    if(isDerivedNode(node) || isEffectNode(node)) throw Error("Expected a writable node.");
-    const f = getValue.bind(node) as ReadableSignal<T> & Self<ValueNode<T>>;
+function asReadable<T>(node: ValueNode<T>): ReadableSignal<T> & Meta<ValueNode<T>> {
+    if (isDerivedNode(node) || isEffectNode(node)) throw Error("Expected a writable signal.");
+    const f = getValue.bind(node) as ReadableSignal<T> & Meta<ValueNode<T>>;
     f._self = node;
     return f;
 }
 
 /** Wrap info in a derived facade */
-function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> & Self<DerivedNode<T>> {
-    let f = calcDerivedNode.bind(node) as DerivedSignal<T> & Self<DerivedNode<T>>;
+function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> & Meta<DerivedNode<T>> {
+    let f = calcDerivedNode.bind(node) as DerivedSignal<T> & Meta<DerivedNode<T>>;
     f._self = node;
     return f;
 }
 
 /** Wrap info in an effect facade */
 function asEffect(node: EffectNode): Effect {
-    let f = actEffectNode.bind(node) as Effect & Self<EffectNode>;
+    let f = actEffectNode.bind(node) as Effect & Meta<EffectNode>;
     f._self = node;
     return f;
 }
@@ -333,13 +355,13 @@ function checkEffectNode(self: EffectNode, cn: NumberType): void {
 }
 
 /** Get value from a readonly value node. */
-function getValue<T>(this: ValueNode<T>, _?:T) : T {
+function getValue<T>(this: ValueNode<T>, _?: T): T {
     if (denyReentry) throw new ReentryError(ERR_READ);
     return this.v!;
 }
 
 /** Get or set value on a writable value node. */
-function sgetValue<T>(this: ValueNode<T>, v?:T) : T | void {
+function sgetValue<T>(this: ValueNode<T>, v?: T): T | void {
     if (denyReentry) throw new ReentryError(v == undefined ? ERR_READ : ERR_WRITE);
     if (v == undefined) return this.v!;
     if (Object.is(this.v, v)) return;
@@ -348,7 +370,7 @@ function sgetValue<T>(this: ValueNode<T>, v?:T) : T | void {
 }
 
 /**  Performs a dependency check and calculates if it is outdated. Returns the current value. */
-function calcDerivedNode<T>(this: DerivedNode<T>, _?:T): T {
+function calcDerivedNode<T>(this: DerivedNode<T>, _?: T): T {
     if (denyReentry) throw new ReentryError(ERR_READ);
     try {
         denyReentry = true;

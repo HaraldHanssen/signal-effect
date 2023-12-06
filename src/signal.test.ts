@@ -1,4 +1,4 @@
-import { ReentryError, derived, effect, readonly, signal, signals, update } from "./signal";
+import { ReentryError, propup, derived, effect, readonly, signal, signals, update } from "./signal";
 
 test("get signal value", () => {
     const s = signal(42);
@@ -370,5 +370,32 @@ test("deny reentry in effect actions", () => {
 test("deny readonly wrapping of a derived signal", () => {
     const s = signal(42);
     const a = derived(s, (x) => x);
-    expect(() => readonly(a)).toThrow(Error);
+    expect(() => readonly(a as any)).toThrow(Error);
+});
+
+test("allow writable to be transformed to a property", () => {
+    const o = propup({}, "signal", signal(42));
+    expect(o.signal).toBe(42);
+    o.signal = 43;
+    expect(o.signal).toBe(43);
+});
+test("allow readable to be transformed to a property", () => {
+    const s = signal(42);
+    const o = propup(undefined, "signal", readonly(s));
+    expect(o.signal).toBe(42);
+    expect(() => (o as any).signal = 43).toThrow(Error);
+    s(43);
+    expect(o.signal).toBe(43);
+});
+test("allow derived to be transformed to a property", () => {
+    const s = signal(42);
+    const o = propup(null, "signal", derived(s, x => x));
+    expect(o.signal).toBe(42);
+    expect(() => (o as any).signal = 43).toThrow(Error);
+    s(43);
+    expect(o.signal).toBe(43);
+});
+test("deny effect to be transformed to a property", () => {
+    const s = signal(42);
+    expect(() => propup({}, "signal", effect(s, () => {}))).toThrow(Error);
 });
