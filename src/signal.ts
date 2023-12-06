@@ -67,22 +67,31 @@ type DerivedSignalType = DerivedSignal<any>;
 type DerivedSignalTypes = [DerivedSignalType, ...Array<DerivedSignalType>] | Array<DerivedSignalType>;
 type DerivedSignalValues<T> = { [K in keyof T]: T[K] extends DerivedSignal<infer U> ? U : never };
 
-/** Create a single writable signal with the provided initial value */
+/** Create a single writable signal with the provided initial value. */
 export function signal<T>(initial: T): WritableSignal<T> {
     return asWritable(createValueNode(initial));
 }
 
-/** Create an array of writable signals with the provided initial value */
+/** Create an array of writable signals with the provided initial value. */
 export function signals<P extends WritableSignalInitTypes>(...initials: P): WritableSignalInitValues<P> {
     return initials.map(x => signal(x)) as WritableSignalInitValues<P>;
 }
 
-/** Create a read only signal from an existing signal */
+/** Create a read only signal from an existing signal. */
 export function readonly<T>(signal: WritableSignal<T>): ReadableSignal<T> {
     return asReadable(getValueNode(signal));
 }
 
-/** Create a derived/calculated signal from one or more sources */
+/** 
+ * Create a derived/calculated signal from one or more sources.
+ * 
+ * To avoid feedback loops the calculation function is not allowed to reenter the signal system,
+ * this means the provided callback must avoid to manually
+ * (a) get a value from a writable/readonly/derived signal, or
+ * (b) set a value on a writable, or
+ * (c) call act on an effect.
+ * Using a delayed reentry with e.g. {@link setTimeout} is allowed but not encouraged; this kind of code can get messy.
+*/
 export function derived<P extends ReadableSignalType, T>(r: P, calc: (r: ReadableSignalValue<P>) => T): DerivedSignal<T>;
 export function derived<P1 extends ReadableSignalType, P2 extends ReadableSignalType, T>
     (r1: P1, r2: P2, calc: (r1: ReadableSignalValue<P1>, r2: ReadableSignalValue<P2>) => T): DerivedSignal<T>;
@@ -103,7 +112,16 @@ export function derived(...args: any[]): any {
     return asDerived(createDerivedNode(args.slice(0, -1).map(x => getValueNode(x)), ((a: any[]) => dd(...a))));
 }
 
-/** Create an effect/action from one or more sources */
+/** 
+ * Create an effect/action from one or more sources.
+ * 
+ * To avoid feedback loops the action function is not allowed to reenter the signal system,
+ * this means the provided callback must avoid to manually
+ * (a) get a value from a writable/readonly/derived signal, or
+ * (b) set a value on a writable, or
+ * (c) call act on an effect.
+ * Using a delayed reentry with e.g. {@link setTimeout} is allowed but not encouraged; this kind of code can get messy.
+*/
 export function effect<P extends ReadableSignalType>(r: P, act: (r: ReadableSignalValue<P>) => void): Effect;
 export function effect<P1 extends ReadableSignalType, P2 extends ReadableSignalType>
     (r1: P1, r2: P2, act: (r1: ReadableSignalValue<P1>, r2: ReadableSignalValue<P2>) => void): Effect;
@@ -260,13 +278,7 @@ function asReadable<T>(node: ValueNode<T>): ReadableSignal<T> & Self<ValueNode<T
 function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> {
     const f = (_?: T): any => {
         if (denyReentry) throw new ReentryError(ERR_READ);
-        try {
-            denyReentry = true;
-            return checkAndCalc(f._self, currN())[0];
-        }
-        finally {
-            denyReentry = false;
-        }
+        return checkAndCalc(f._self);
     };
     f._self = node;
     return f;
@@ -278,13 +290,13 @@ function asEffect(node: EffectNode): Effect {
 }
 
 /** Check dependent nodes for changes and return their latest values. */
-function checkAndCalcDependencies(self: DependentNode, cn: NumberType): [any[], boolean] {
+function checkDependencies(self: DependentNode, cn: NumberType): [any[], boolean] {
     let changed = false;
     const values = Array.from(self.d, (v, _) => {
         const node = v as MaybeDerivedNode<any>;
         if (node.f && node.d) {
             // DerivedNode
-            const result = checkAndCalc(v as DerivedNode<any>, cn);
+            const result = checkDerivedNode(v as DerivedNode<any>, cn);
             changed ||= result[1];
             return result[0];
         } else {
@@ -299,12 +311,12 @@ function checkAndCalcDependencies(self: DependentNode, cn: NumberType): [any[], 
     return [values, changed];
 }
 
-/** Performs a dependency checks and calculates if it is outdated */
-function checkAndCalc<T>(self: DerivedNode<T>, cn: NumberType): [T, boolean] {
+/** Performs dependency checks and calculates if it is outdated */
+function checkDerivedNode<T>(self: DerivedNode<T>, cn: NumberType): [T, boolean] {
     let changed = false;
     if (cn > self.n) {
         // Changes has occured somewhere. Check if any of the dependencies are affected.
-        const [values, depChange] = checkAndCalcDependencies(self, cn);
+        const [values, depChange] = checkDependencies(self, cn);
 
         changed ||= self.n == MIN_N;
         changed ||= depChange;
@@ -320,27 +332,45 @@ function checkAndCalc<T>(self: DerivedNode<T>, cn: NumberType): [T, boolean] {
     return [self.v!, changed];
 }
 
-/** Performs a dependency check and acts if it is outdated */
+/** Performs dependency checks and acts if it is outdated */
+function checkEffectNode(self: EffectNode, cn: NumberType): void {
+    if (cn > self.n) {
+        let changed = false;
+        // Changes has occured somewhere. Check if any of the dependencies are affected.
+        const [values, depChange] = checkDependencies(self, cn);
+
+        changed ||= self.n == MIN_N;
+        changed ||= depChange;
+        if (changed) {
+            // Dependencies have changed or this is a new node. Recalculate.
+            self.f(values);
+        }
+
+        // Effect nodes updates the version number each time a change check is performed.
+        // Since dependencies are fixed, this will filter out unneccessary traversals.
+        self.n = cn;
+    }
+}
+
+/** 
+ * Performs a dependency check and calculates if it is outdated.  
+ * 
+*/
+function checkAndCalc<T>(self: DerivedNode<T>): T {
+    try {
+        denyReentry = true;
+        return checkDerivedNode(self, currN())[0];
+    }
+    finally {
+        denyReentry = false;
+    }
+}
+
+/** Performs a dependency check and acts if it is outdated. To avoid feedback loops the function will deny reentry to set or get of signal values.  */
 function checkAndAct(this: EffectNode): void {
     try {
         denyReentry = true;
-        const cn = currN();
-        if (cn > this.n) {
-            let changed = false;
-            // Changes has occured somewhere. Check if any of the dependencies are affected.
-            const [values, depChange] = checkAndCalcDependencies(this, cn);
-
-            changed ||= this.n == MIN_N;
-            changed ||= depChange;
-            if (changed) {
-                // Dependencies have changed or this is a new node. Recalculate.
-                this.f(values);
-            }
-
-            // Effect nodes updates the version number each time a change check is performed.
-            // Since dependencies are fixed, this will filter out unneccessary traversals.
-            this.n = cn;
-        }
+        checkEffectNode(this, currN());
     }
     finally {
         denyReentry = false;
