@@ -321,39 +321,49 @@ test("react will trigger for transitive dependency change", () => {
     expect(a()).toBe(42 + 4);
 });
 
-test("deny reentry to signals for derived calculations", () => {
+test("deny reentry in derived calculations", () => {
     const s = signal(42);
-    const a = derived(s, (x) => {
-        return x + s();
-    });
-    const b = derived(s, (x) => {
-        s(43);
+    const justCalc = derived(s, (x) => x);
+    const justAct = effect(s, () => { });
+    const enterGet = derived(s, (x) => x + s());
+    const enterSet = derived(s, (x) => {
+        s(x);
         return x;
     });
-    const c = derived(s, (x) => {
-        return x;
-    });
-    expect(a).toThrow(ReentryError);
-    expect(b).toThrow(ReentryError);
-    expect(c()).toBe(42); // Back to normal
+    const enterCalc = derived(s, (_) => justCalc());
+    const enterAct = derived(s, (_) => justAct.act());
+
+    for (let i = 42; i < 45; i++) {
+        s(i);
+        expect(enterGet).toThrow(ReentryError);
+        expect(justCalc()).toBe(i); // Not denied
+        expect(enterSet).toThrow(ReentryError);
+        expect(justCalc()).toBe(i); // Not denied
+        expect(enterCalc).toThrow(ReentryError);
+        expect(justCalc()).toBe(i); // Not denied
+        expect(enterAct).toThrow(ReentryError);
+        expect(justCalc()).toBe(i); // Not denied
+    }
+
 });
-test("deny reentry to signals or derived for effect actions", () => {
+test("deny reentry in effect actions", () => {
     const s = signal(42);
-    const a = effect(s, () => {
-        s();
-    });
-    const b = effect(s, () => {
-        s(43);
-    });
-    const c = derived(s, (x) => {
-        return x;
-    });
-    const d = effect(s, () => {
-        c();
-    });
-    expect(a.act).toThrow(ReentryError);
-    expect(b.act).toThrow(ReentryError);
-    expect(c()).toBe(42); // Back to normal
-    expect(d.act).toThrow(ReentryError);
-    expect(c()).toBe(42); // Back to normal
+    const justCalc = derived(s, (x) => x);
+    const justAct = effect(s, () => { });
+    const enterGet = effect(s, () => s());
+    const enterSet = effect(s, () => s(43));
+    const enterCalc = effect(s, () => justCalc());
+    const enterAct = effect(s, () => justAct.act());
+
+    for (let i = 42; i < 45; i++) {
+        s(i);
+        expect(enterGet.act).toThrow(ReentryError);
+        expect(justCalc()).toBe(i); // Not denied
+        expect(enterSet.act).toThrow(ReentryError);
+        expect(justCalc()).toBe(i); // Not denied
+        expect(enterCalc.act).toThrow(ReentryError);
+        expect(justCalc()).toBe(i); // Not denied
+        expect(enterAct.act).toThrow(ReentryError);
+        expect(justCalc()).toBe(i); // Not denied
+    }
 });
