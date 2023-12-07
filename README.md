@@ -51,7 +51,7 @@ Reactive signal library without any dependencies.
 
 - **update**
 
-    Bulk update of provided primitives. ```derived``` signals are executed first then the ```effect```s.
+    Bulk update of provided primitives. Recommended order is to call it with ```derived``` signals first and then with the ```effect```s.
 
 ## Examples
 ### Create a signal
@@ -122,7 +122,7 @@ log(); // outputs '42'
 
 ## TODOs
 - Support writing to signals from effect calculations
-- Make sure the update support method is true, and not just a simple loop :-)
+- Return affected signals from the update method 
 - (DONE) Throw error when setting a readonly signal directly. Should exhibit the same behavior as when it is used as a property.
 - (...)
 

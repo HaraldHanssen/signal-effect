@@ -187,7 +187,7 @@ export function propup(o: any, p: any, s: any): any {
  * Perform bulk update of the provided signals/effects. Only changed signals are propagated through.
  * Use this method at the appropriate time when these updates should occur. See {@link suspend} for more info.
  */
-export function update(items: Effect[] | DerivedSignal<any>[]) {
+export function update(items: DerivedSignal<any>[] | Effect[]) {
     items.forEach(x => x());
 }
 
