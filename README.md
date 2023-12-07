@@ -68,7 +68,7 @@ const canAccept = signal(false);
 const showAccept = readonly(canAccept);
 console.log(showAccept()); // outputs 'false'
 
-showAccept(true); // ignored
+//showAccept(true); // throws error
 console.log(showAccept()); // outputs 'false'
 
 canAccept(true);
@@ -103,6 +103,9 @@ console.log(fullname()); // outputs 'Douglas Adams'
 // derived can also rely on other derived signals
 const uppercase = derived(fullname, (f) => f.toUpperCase());
 console.log(uppercase()); // outputs 'DOUGLAS ADAMS'
+
+// and it cannot be written to
+uppercase("DA"); // throws error, does not contain setter
 ```
 
 ### Create an effect action that triggers when signals change
@@ -120,9 +123,10 @@ log(); // outputs '42'
 ## TODOs
 - Support writing to signals from effect calculations
 - Make sure the update support method is true, and not just a simple loop :-)
-- Throw error when setting a readonly signal directly. Should exhibit the same behavior as when it is used as a property.
+- (DONE) Throw error when setting a readonly signal directly. Should exhibit the same behavior as when it is used as a property.
+- (...)
 
 
 ## Disclaimer
-This library was created just for the fun of it. I was curious of the sudden leap to a signal system in Svelte and Angular, and wanted to see how such a system could be constructed. This library is tested to the extent of the current 30+ unit tests. It might be useful in a tool setting or maybe as an inspiration. Try it out if you like.
+This library was created just for the fun of it. I was curious of the "sudden leap" to a signal system in Svelte and Angular, and wanted to see how such a system could be constructed. This library is tested to the extent of the current 30+ unit tests. It might be useful in some settings or maybe as an inspiration. Try it out if you like.
 

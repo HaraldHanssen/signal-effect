@@ -63,6 +63,7 @@ export interface WritableSignal<T> extends ReadableSignal<T> {
  * Use the @see init method to set an initial value of the derived signal.
 */
 export interface DerivedSignal<T> extends ReadableSignal<T> {
+    /** Initialize the derived signal to a value. Might be necessary when the lifecycle methods are used. */
     init: (v:T) => DerivedSignal<T>
 }
 
@@ -446,7 +447,8 @@ function checkEffectNode(self: EffectNode, cn: NumberType): void {
 }
 
 /** Get value from a readonly value node. */
-function getValue<T>(this: ValueNode<T>, _?: T): T {
+function getValue<T>(this: ValueNode<T>, v?: T): T {
+    if (v) throw TypeError("Cannot modify a readonly signal");
     if (denyReentry) throw new ReentryError(ERR_REENTRY_READ);
     return this.v!;
 }
@@ -467,7 +469,8 @@ function initValue<T,F>(this: DerivedNode<T>, f:F, v:T): F {
 }
 
 /**  Performs a dependency check and calculates if it is outdated. Returns the current value. */
-function calcDerivedNode<T>(this: DerivedNode<T>, _?: T): T {
+function calcDerivedNode<T>(this: DerivedNode<T>, v?: T): T {
+    if (v) throw TypeError("Cannot modify a derived signal");
     if (suspendExecution && this.v) return this.v;
     if (suspendExecution) throw new SuspendError(ERR_SUSPEND_CALC);
     if (denyReentry) throw new ReentryError(ERR_REENTRY_READ);

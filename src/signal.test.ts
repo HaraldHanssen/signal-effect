@@ -483,7 +483,7 @@ test("example expose a signal as readonly", () => {
     const showAccept = readonly(canAccept);
     expect(showAccept()).toBe(false);
 
-    (showAccept as any)(true); // ignored
+    expect(() => (showAccept as any)(true)).toThrow(TypeError);
     expect(showAccept()).toBe(false);
 
     canAccept(true);
@@ -500,7 +500,7 @@ test("example expose signal as a property on an object", () => {
     propup(dialog, "canAccept", readonly(canAccept));
 
     expect(dialog.canAccept).toBe(false);
-    expect(() => dialog.canAccept = true).toThrow(Error);
+    expect(() => dialog.canAccept = true).toThrow(TypeError);
 });
 test("example derive a new signal from another", () => {
     const name = signal("Douglas");
@@ -514,6 +514,9 @@ test("example derive a new signal from another", () => {
     // derived can also rely on other derived signals
     const uppercase = derived(fullname, (f) => f.toUpperCase());
     expect(uppercase()).toBe("DOUGLAS ADAMS");
+
+    // and it cannot be written to
+    expect(() => (uppercase as any)("DA")).toThrow(TypeError);
 });
 test("example create an effect action that triggers when signals change", () => {
     let acted = 0;
