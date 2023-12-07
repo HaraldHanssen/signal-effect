@@ -24,9 +24,11 @@ Reactive signal library without any dependencies.
 
     ```signal```s and ```derived```s can be attached as properties to an object. Allows normal get/set coding.
 
-- **Feedback-Loop Prevention**
+- **Recursion Prevention**
 
     Will throw error if ```derived``` calculations and ```effect``` actions try to reenter the signal system and e.g. grab values it does not depend upon.
+    
+    ```effect```s are allowed to write back to the signals again, this _will not_ cause endless recursion until stack overflow. The calculations and effects are just sampled.
 
 - **Bulk Update**
 
@@ -121,10 +123,10 @@ log(); // outputs '42'
 ```
 
 ## TODOs
-- Support writing to signals from effect calculations
 - Return affected signals from the update method 
+- (DONE) Support writing to signals from effect calculations
 - (DONE) Throw error when setting a readonly signal directly. Should exhibit the same behavior as when it is used as a property.
-- (...)
+- ...
 
 
 ## Disclaimer

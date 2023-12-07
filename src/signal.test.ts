@@ -33,6 +33,22 @@ function suspendCalc(f: () => void): void {
     }
 }
 
+const jestConsole = console;
+
+beforeEach(() => {
+  global.console = require('console');
+});
+
+afterEach(() => {
+  global.console = jestConsole;
+});
+
+// function selfN(x: any):any {
+//     return x._self.n;
+// }
+
+// Basics
+
 test("get signal value", () => {
     const s = signal(42);
     expect(s()).toBe(42);
@@ -369,6 +385,14 @@ test("update of effect will trigger for transitive dependency change", () => {
     expect(a()).toBe(42 + 4);
 });
 
+// Permissions
+
+test("deny readonly wrapping of a derived signal", () => {
+    const s = signal(42);
+    const a = derived(s, (x) => x);
+    expect(() => readonly(a as any)).toThrow(SignalError);
+});
+
 test("deny reentry in derived calculations", () => {
     const s = signal(42);
     const justCalc = derived(s, (x) => x);
@@ -394,31 +418,59 @@ test("deny reentry in derived calculations", () => {
     }
 
 });
-test("deny reentry in effect actions", () => {
+test("deny reentry to read and execute in effect actions", () => {
+    // Reading should be set up as a dependency
     const s = signal(42);
     const justCalc = derived(s, (x) => x);
     const justAct = effect(s, () => { });
     const enterGet = effect(s, () => s());
-    const enterSet = effect(s, () => s(43));
     const enterCalc = effect(s, () => justCalc());
     const enterAct = effect(s, () => justAct());
 
     for (let i = 42; i < 45; i++) {
         s(i);
         expect(enterGet).toThrow(ReentryError);
-        expect(justCalc()).toBe(i); // Not denied
-        expect(enterSet).toThrow(ReentryError);
-        expect(justCalc()).toBe(i); // Not denied
+        expect(justCalc()).toBe(i);
         expect(enterCalc).toThrow(ReentryError);
-        expect(justCalc()).toBe(i); // Not denied
+        expect(justCalc()).toBe(i);
         expect(enterAct).toThrow(ReentryError);
-        expect(justCalc()).toBe(i); // Not denied
+        expect(justCalc()).toBe(i);
     }
 });
-test("deny readonly wrapping of a derived signal", () => {
-    const s = signal(42);
-    const a = derived(s, (x) => x);
-    expect(() => readonly(a as any)).toThrow(SignalError);
+test("allow reentry to write in effect actions (even in a feedback loop)", () => {
+    // Writing can be set up as a feedback loop, in some type of calculations this
+    // is ok (e.g. integration). The evaluation only samples the effect each execution.
+
+    // In this test setup sourceA affects sourceB and vice versa.
+    const iters = 5;
+    const expected = [] as { a: number, b: number}[]; 
+    let expSourceA = 1;
+    let expSourceB = 1;
+    for (let i = 0; i < iters; i++) {
+        expSourceB = expSourceA + 1;
+        expSourceA = expSourceB + 2;
+        expected.push({ a: expSourceA, b: expSourceB});
+    }
+
+    const sourceA = signal(1);
+    const justCalcA = derived(sourceA, (x) => x + 1);
+    const enterSetB = effect(justCalcA, (x) => sourceB(x));
+    const sourceB = signal(1);
+    const justCalcB = derived(sourceB, (x) => x + 2);
+    const enterSetA = effect(justCalcB, (x) => sourceA(x));
+
+    for (let i = 0; i < iters; i++) {
+        if (i % 2 > 0) {
+            // make sure there are no sideeffects to calling the derived calculations
+            // before the effects.
+            justCalcA();
+            justCalcB();
+        }
+        expect(enterSetB).not.toThrow(ReentryError);
+        expect(enterSetA).not.toThrow(ReentryError);
+        expect(sourceA()).toBe(expected[i].a);
+        expect(sourceB()).toBe(expected[i].b);
+    }
 });
 
 test("allow writable to be transformed to a property", () => {
@@ -472,6 +524,8 @@ test("deny execution of derived and effects in suspended mode", () => {
     expect(act).not.toThrow(Error);
 });
 
+// Examples
+
 test("example creating a signal", () => {
     const canAccept = signal(false);
     expect(canAccept()).toBe(false);
@@ -505,12 +559,12 @@ test("example expose signal as a property on an object", () => {
 test("example derive a new signal from another", () => {
     const name = signal("Douglas");
     const surname = signal("");
-    const fullname = derived(name, surname, (n, s) => [n,s].join(" ").trim());
-    
+    const fullname = derived(name, surname, (n, s) => [n, s].join(" ").trim());
+
     expect(fullname()).toBe("Douglas");
     surname("Adams");
     expect(fullname()).toBe("Douglas Adams");
-    
+
     // derived can also rely on other derived signals
     const uppercase = derived(fullname, (f) => f.toUpperCase());
     expect(uppercase()).toBe("DOUGLAS ADAMS");
