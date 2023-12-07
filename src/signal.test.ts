@@ -23,7 +23,7 @@
  */
 import { ReentryError, propup, derived, effect, readonly, signal, signals, update, resume, suspend, SuspendError, SignalError } from "./signal";
 
-function suspendCalc(f:() => void):void {
+function suspendCalc(f: () => void): void {
     try {
         suspend();
         f();
@@ -445,7 +445,7 @@ test("allow derived to be transformed to a property", () => {
 });
 test("deny effect to be transformed to a property", () => {
     const s = signal(42);
-    expect(() => propup({}, "signal", effect(s, () => {}))).toThrow(SignalError);
+    expect(() => propup({}, "signal", effect(s, () => { }))).toThrow(SignalError);
 });
 
 test("allow reading and writing to signals in suspended mode", () => {
@@ -463,7 +463,7 @@ test("allow reading and writing to signals in suspended mode", () => {
 test("deny execution of derived and effects in suspended mode", () => {
     const s = signal(42);
     const uninitialized = derived(s, (x) => x);
-    const act = effect(s, () => {});
+    const act = effect(s, () => { });
     suspendCalc(() => {
         expect(uninitialized).toThrow(SuspendError);
         expect(act).toThrow(SuspendError);
@@ -471,3 +471,69 @@ test("deny execution of derived and effects in suspended mode", () => {
     expect(uninitialized()).toBe(42);
     expect(act).not.toThrow(Error);
 });
+
+test("example creating a signal", () => {
+    const canAccept = signal(false);
+    expect(canAccept()).toBe(false);
+    canAccept(true);
+    expect(canAccept()).toBe(true);
+});
+test("example expose a signal as readonly", () => {
+    const canAccept = signal(false);
+    const showAccept = readonly(canAccept);
+    expect(showAccept()).toBe(false);
+
+    (showAccept as any)(true); // ignored
+    expect(showAccept()).toBe(false);
+
+    canAccept(true);
+    expect(showAccept()).toBe(true);
+});
+test("example expose signal as a property on an object", () => {
+    const dialog = {} as any;
+    propup(dialog, "name", signal(""));
+
+    dialog.name = "Douglas";
+    expect(dialog.name).toBe("Douglas");
+
+    const canAccept = signal(false);
+    propup(dialog, "canAccept", readonly(canAccept));
+
+    expect(dialog.canAccept).toBe(false);
+    expect(() => dialog.canAccept = true).toThrow(Error);
+});
+test("example derive a new signal from another", () => {
+    const name = signal("Douglas");
+    const surname = signal("");
+    const fullname = derived(name, surname, (n, s) => [n,s].join(" ").trim());
+    
+    expect(fullname()).toBe("Douglas");
+    surname("Adams");
+    expect(fullname()).toBe("Douglas Adams");
+    
+    // derived can also rely on other derived signals
+    const uppercase = derived(fullname, (f) => f.toUpperCase());
+    expect(uppercase()).toBe("DOUGLAS ADAMS");
+});
+test("example create an effect action that triggers when signals change", () => {
+    let acted = 0;
+    let result = 0;
+    const a = signal(1);
+    const b = signal(2);
+    const c = derived(a, b, (x, y) => 2 * x + y);
+    const log = effect(c, (x) => {
+        acted++;
+        result = x;
+    });
+    log();
+    expect(result).toBe(4);
+    expect(acted).toBe(1);
+    log();
+    expect(result).toBe(4);
+    expect(acted).toBe(1);
+    a(20);
+    log();
+    expect(result).toBe(42);
+    expect(acted).toBe(2);
+});
+
