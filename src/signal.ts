@@ -30,7 +30,12 @@
 */
 export interface ReadableSignal<T> {
     /** Value reader */
-    (): T
+    (): T,
+    /** 
+     * Unique id for use in maps and equality checks. Facades may not be the same but 
+     * the id is.
+    */
+    readonly id: NodeId
 }
 
 /**
@@ -78,6 +83,11 @@ export interface DerivedSignal<T> extends ReadableSignal<T> {
 export interface Effect {
     /** Effect action invoker. Will trigger the action if dependencies have changed. */
     (): void,
+    /** 
+     * Unique id for use in maps and equality checks. Facades may not be the same but 
+     * the id is.
+    */
+    readonly id: NodeId
     /** Metadata */
     readonly act: true
 }
@@ -97,7 +107,7 @@ type WritableProperty<P extends PropertyKey, T> = { [K in P]: T };
 
 /** Create a single writable signal with the provided initial value. */
 export function signal<T>(initial: T): WritableSignal<T> {
-    return asWritable(createValueNode(initial));
+    return asWritable(createSignalNode(initial));
 }
 
 /** Create an array of writable signals with the provided initial value. */
@@ -133,11 +143,15 @@ export function derived<P extends ReadableSignalTypes, T>(sources: P, calc: (val
 export function derived(...args: any[]): any {
     if (args.length < 2) throw new SignalError("Expected at least 2 parameters!");
     if (args.length == 2 && Array.isArray(args[0])) {
-        return asDerived(createDerivedNode(args[0].map(x => extractValueNode(x)), args.slice(-1)[0]));
+        const d = asDerived(createDerivedNode(args[0].map(x => extractValueNode(x)), args.slice(-1)[0]));
+        execution.handler.changed(undefined, [d], undefined);
+        return d;
     }
 
     const dd = args.slice(-1)[0] as ((...a: any[]) => any);
-    return asDerived(createDerivedNode(args.slice(0, -1).map(x => extractValueNode(x)), ((a: any[]) => dd(...a))));
+    const d = asDerived(createDerivedNode(args.slice(0, -1).map(x => extractValueNode(x)), ((a: any[]) => dd(...a))));
+    execution.handler.changed(undefined, [d], undefined);
+    return d;
 }
 
 /** 
@@ -163,11 +177,15 @@ export function effect<P extends ReadableSignalTypes>(sources: P, act: (values: 
 export function effect(...args: any[]): any {
     if (args.length < 2) throw new SignalError("Expected at least 2 parameters!");
     if (args.length == 2 && Array.isArray(args[0])) {
-        return asEffect(createEffectNode(args[0].map(x => extractValueNode(x)), args.slice(-1)[0]));
+        const e = asEffect(createEffectNode(args[0].map(x => extractValueNode(x)), args.slice(-1)[0]));
+        execution.handler.changed(undefined, undefined, [e]);
+        return e;
     }
 
     const ee = args.slice(-1)[0] as ((...a: any[]) => void);
-    return asEffect(createEffectNode(args.slice(0, -1).map(x => extractValueNode(x)), ((a: any[]) => ee(...a))));
+    const e = asEffect(createEffectNode(args.slice(0, -1).map(x => extractValueNode(x)), ((a: any[]) => ee(...a))));
+    execution.handler.changed(undefined, undefined, [e]);
+    return e;
 }
 
 /** Transform a signal to become a property on an object. Creates new object if null or undefined. */
@@ -207,9 +225,8 @@ export function update(items: DerivedSignal<any>[] | Effect[]) {
 export interface ExecutionHandler {
     /** 
      * Called each time a writable signal has changed, or when a derived or effect is added.
-     * Do not modify the signal in this callback!
     */
-    changed(changed: WritableSignal<any>, deriveds: DerivedSignal<any>[] | undefined, effects: Effect[] | undefined): void;
+    changed(changed: ReadableSignal<any> | undefined, deriveds: DerivedSignal<any>[] | undefined, effects: Effect[] | undefined): void;
 }
 
 /** The delayed execution handler stores the affected deriveds and effects and executes them when @see update is called. */
@@ -219,11 +236,11 @@ export interface DelayedExecutionHandler extends ExecutionHandler {
 }
 
 function createNoopExecutionHandler(): ExecutionHandler {
-    return { changed: () => {} };
+    return { changed: () => { } };
 }
 
 function createImmediateExecutionHandler(): ExecutionHandler {
-    function changed(_: WritableSignal<any>, deriveds: DerivedSignal<any>[] | undefined, effects: Effect[] | undefined) {
+    function changed(_: ReadableSignal<any> | undefined, deriveds: DerivedSignal<any>[] | undefined, effects: Effect[] | undefined) {
         deriveds?.forEach(x => x());
         effects?.forEach(x => x());
     }
@@ -233,7 +250,7 @@ function createImmediateExecutionHandler(): ExecutionHandler {
 function createDelayedExecutionHandler(): DelayedExecutionHandler {
     let d = [] as DerivedSignal<any>[];
     let e = [] as Effect[];
-    function changed(_: WritableSignal<any>, deriveds: DerivedSignal<any>[] | undefined, effects: Effect[] | undefined) {
+    function changed(_: ReadableSignal<any> | undefined, deriveds: DerivedSignal<any>[] | undefined, effects: Effect[] | undefined) {
         if (deriveds) d.push(...deriveds);
         if (effects) e.push(...effects);
     }
@@ -257,7 +274,7 @@ export const ImmediateExecution = createImmediateExecutionHandler();
 export const DelayedExecution = createDelayedExecutionHandler();
 
 /** The execution handler determines how the execution is performed. */
-export let executionHandler: ExecutionHandler = NoopExecution;
+export const execution = { handler: NoopExecution };
 
 /**
  * Base class for all signal related errors.
@@ -287,6 +304,13 @@ let allowReentryReadWrite = false;
 const ERR_REENTRY_READ = "Reading a signal manually within a derived/effect callback is not allowed. Pass the signal as a dependency instead.";
 const ERR_REENTRY_WRITE = "Writing to a signal within a derived callback is not allowed";
 
+// Monotonically increasing id number
+type NodeId = number;
+let seqId: NodeId = 0;
+function nextId(): NodeId {
+    return (++seqId);
+}
+
 // Monotonically increasing sequence number
 type SequenceNumber = bigint;
 const MIN_SEQ: SequenceNumber = 0n;
@@ -302,6 +326,8 @@ export function currN(): SequenceNumber {
 
 // Node information
 type Node = {
+    /** Unique node id used for matching and lookup */
+    id: NodeId,
     /** 
      * The sequence number representing the current value or effect.
      * For dependent nodes this is the maximum of all its node dependencies
@@ -319,13 +345,18 @@ type DependentNode = Node & {
      * The writable dependencies that will trigger reevaluation.
      * Derived calculations are filtered out.
      */
-    triggers: ValueNode<any>[]
+    triggers: SignalNode<any>[]
 };
 
 type ValueNode<T> = Node & {
     /** The current value of the given type */
-    value?: T
+    value?: T,
 };
+
+type SignalNode<T> = ValueNode<T> & {
+    /** Reverse of triggers */
+    dependents: WeakRef<DependentNode>[]
+}
 
 type DerivedNode<T> = ValueNode<T> & DependentNode & {
     /** The calculation function to execute when dependencies change */
@@ -345,6 +376,8 @@ type Action = (args: any[]) => void;
 
 /** Function metadata */
 type Meta<F> = {
+    /** The identifier of the node */
+    id: NodeId,
     /** The reference field that is added to the function facades. Same as 'this' inside the methods. */
     _self: F,
     /** True if the provided function can be used as a setter */
@@ -354,33 +387,37 @@ type Meta<F> = {
 };
 
 /** Traverses the dependency tree and extracts the nodes that will trigger changes to the tree. */
-function addWritableDependencies(writables: ValueNode<any>[], dependencies: (ValueNode<any> & Partial<DependentNode>)[]) {
+function addWritableDependencies(writables: SignalNode<any>[], dependencies: (ValueNode<any> & Partial<DependentNode>)[]) {
     dependencies.forEach(x => {
         if (x.dependencies) {
             addWritableDependencies(writables, x.dependencies)
         } else {
-            writables.push(x);
+            writables.push(x as SignalNode<any>);
         }
     });
 }
 
 /** Construct a new value node for source signals */
-function createValueNode<T>(initial: T): ValueNode<T> {
-    return { current: nextN(), value: initial };
+function createSignalNode<T>(initial: T): SignalNode<T> {
+    return { id: nextId(), current: nextN(), value: initial, dependents: [] };
 }
 
 /** Construct a new derived node with the provided dependencies and calculation callback */
 function createDerivedNode<T>(dependencies: ValueNode<any>[], calculation: Calculation<any>): DerivedNode<T> {
-    const triggers = [] as ValueNode<any>[];
+    const triggers = [] as SignalNode<any>[];
     addWritableDependencies(triggers, dependencies);
-    return { current: MIN_SEQ, checked: MIN_SEQ, value: undefined, dependencies, triggers, calculation };
+    const node: DerivedNode<T> = { id: nextId(), current: MIN_SEQ, checked: MIN_SEQ, value: undefined, dependencies, triggers, calculation };
+    triggers.forEach(x => x.dependents.push(new WeakRef(node)));
+    return node;
 }
 
 /** Construct a new effect node with the provided dependencies and action callback */
 function createEffectNode(dependencies: ValueNode<any>[], action: Action): EffectNode {
-    const triggers = [] as ValueNode<any>[];
+    const triggers = [] as SignalNode<any>[];
     addWritableDependencies(triggers, dependencies);
-    return { current: MIN_SEQ, checked: MIN_SEQ, dependencies, triggers, action };
+    const node = { id: nextId(), current: MIN_SEQ, checked: MIN_SEQ, dependencies, triggers, action };
+    triggers.forEach(x => x.dependents.push(new WeakRef(node)));
+    return node;
 }
 
 /** Extract value node from signal metadata */
@@ -390,12 +427,13 @@ function extractValueNode<T>(signal: ReadableSignal<T>): ValueNode<T> {
 
 /** Extract write flag from signal metadata */
 function extractWrite<T>(signal: ReadableSignal<T>): boolean {
-    return (signal as unknown as Meta<ValueNode<T>>).write ?? false;
+    return (signal as unknown as Meta<SignalNode<T>>).write ?? false;
 }
 
 /** Wrap info in a writable facade */
-function asWritable<T>(node: ValueNode<T>): WritableSignal<T> & Meta<ValueNode<T>> {
-    const f = sgetValue.bind(node) as WritableSignal<T> & Meta<ValueNode<T>>;
+function asWritable<T>(node: SignalNode<T>): WritableSignal<T> & Meta<SignalNode<T>> {
+    const f = sgetValue.bind(node) as WritableSignal<T> & Meta<SignalNode<T>>;
+    Object.defineProperty(f, "id", { value: node.id, writable: false });
     Object.defineProperty(f, "_self", { value: node, writable: false });
     Object.defineProperty(f, "write", { value: true, writable: false });
     return f;
@@ -404,7 +442,8 @@ function asWritable<T>(node: ValueNode<T>): WritableSignal<T> & Meta<ValueNode<T
 /** Wrap info in a readable facade */
 function asReadable<T>(node: ValueNode<T>): ReadableSignal<T> & Meta<ValueNode<T>> {
     if (isDerivedNode(node) || isEffectNode(node)) throw new SignalError("Expected a writable signal.");
-    const f = getValue.bind(node) as ReadableSignal<T> & Meta<ValueNode<T>>;
+    const f = getValue.bind(node) as ReadableSignal<T> & Meta<SignalNode<T>>;
+    Object.defineProperty(f, "id", { value: node.id, writable: false });
     Object.defineProperty(f, "_self", { value: node, writable: false });
     return f;
 }
@@ -412,6 +451,7 @@ function asReadable<T>(node: ValueNode<T>): ReadableSignal<T> & Meta<ValueNode<T
 /** Wrap info in a derived facade */
 function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> & Meta<DerivedNode<T>> {
     let f = calcDerivedNode.bind(node) as DerivedSignal<T> & Meta<DerivedNode<T>>;
+    Object.defineProperty(f, "id", { value: node.id, writable: false });
     Object.defineProperty(f, "_self", { value: node, writable: false });
     return f;
 }
@@ -419,17 +459,18 @@ function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> & Meta<DerivedNode
 /** Wrap info in an effect facade */
 function asEffect(node: EffectNode): Effect & Meta<EffectNode> {
     let f = actEffectNode.bind(node) as Effect & Meta<EffectNode>;
+    Object.defineProperty(f, "id", { value: node.id, writable: false });
     Object.defineProperty(f, "_self", { value: node, writable: false });
     Object.defineProperty(f, "act", { value: true, writable: false });
     return f;
 }
 
-function isDerivedNode(node: Partial<DerivedNode<any>>) {
-    return node.calculation && node.dependencies;
+function isDerivedNode(node: Partial<DerivedNode<any>>): boolean {
+    return node.calculation !== undefined && node.dependencies !== undefined;
 }
 
-function isEffectNode(node: Partial<EffectNode>) {
-    return node.action && node.dependencies;
+function isEffectNode(node: Partial<EffectNode>): boolean {
+    return node.action !== undefined && node.dependencies !== undefined;
 }
 
 /** 
@@ -489,12 +530,43 @@ function getValue<T>(this: ValueNode<T>, value?: T): T {
 }
 
 /** Get or set value on a writable value node. */
-function sgetValue<T>(this: ValueNode<T>, value?: T): T | void {
+function sgetValue<T>(this: SignalNode<T>, value?: T): T | void {
     if (denyReentry && !allowReentryReadWrite) throw new ReentryError(value == undefined ? ERR_REENTRY_READ : ERR_REENTRY_WRITE);
     if (value == undefined) return this.value!;
     if (Object.is(this.value, value)) return;
     this.value = value;
     this.current = nextN();
+
+    // Notify execution strategy
+    const deriveds = [] as DerivedSignal<any>[];
+    const effects = [] as Effect[];
+    const dependents = this.dependents;
+    for (let i = 0; i < dependents.length; i++) {
+        const x = dependents[i];
+        const d = x.deref();
+        if (!d) {
+            // dead
+            const end = dependents.length - 1;
+            if (i < end) {
+                //more elements after this one, swap in last element
+                dependents[i] = dependents[end];
+            }
+            // remove last element
+            dependents.length = end;
+            // one step back
+            i--;
+            continue; // i++;
+        }
+
+        if (isDerivedNode(d)) {
+            deriveds.push(asDerived(d as DerivedNode<any>));
+        }
+        else {
+            effects.push(asEffect(d as EffectNode));
+        }
+    }
+
+    execution.handler.changed(asReadable(this), deriveds, effects);
 }
 
 /**  Performs a dependency check and calculates if it is outdated. Returns the current value. */
