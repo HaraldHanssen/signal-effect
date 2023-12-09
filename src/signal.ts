@@ -266,14 +266,14 @@ const ERR_SUSPEND_CALC = "Executing a derived calculation when execution is susp
 // Monotonically increasing sequence number
 type SequenceNumber = bigint;
 const MIN_SEQ: SequenceNumber = 0n;
-let seqnum: SequenceNumber = MIN_SEQ;
+let seqN: SequenceNumber = MIN_SEQ;
 
 function nextN(): SequenceNumber {
-    return (++seqnum);
+    return (++seqN);
 }
 
 export function currN(): SequenceNumber {
-    return seqnum;
+    return seqN;
 }
 
 // Node information
@@ -283,36 +283,36 @@ type Node = {
      * For dependent nodes this is the maximum of all its node dependencies
      * when it was last calculated. 
     */
-    n: SequenceNumber,
+    current: SequenceNumber,
 };
 
 type DependentNode = Node & {
     /** The sequence number when it was last checked against dependencies. */
-    s: SequenceNumber
+    checked: SequenceNumber
     /** The value dependencies */
-    d: ValueNode<any>[]
+    dependencies: ValueNode<any>[]
 };
 
 type ValueNode<T> = Node & {
     /** The current value of the given type */
-    v?: T
+    value?: T
 };
 
 type DerivedNode<T> = ValueNode<T> & DependentNode & {
     /** The calculation function to execute when dependencies change */
-    c: Calc<T>
+    calculation: Calculation<T>
 };
 
 type EffectNode = DependentNode & {
     /** The action function to execute when dependencies change */
-    a: Act
+    action: Action
 };
 
 /** Calculation signature */
-type Calc<T> = (args: any[]) => T;
+type Calculation<T> = (args: any[]) => T;
 
 /** Action signature */
-type Act = (args: any[]) => void;
+type Action = (args: any[]) => void;
 
 /** Function metadata */
 type Meta<F> = {
@@ -328,17 +328,17 @@ type Meta<F> = {
 
 /** Construct a new value node for source signals */
 function createValueNode<T>(initial: T): ValueNode<T> {
-    return { n: nextN(), v: initial };
+    return { current: nextN(), value: initial };
 }
 
 /** Construct a new derived node with the provided dependencies and calculation callback */
-function createDerivedNode<T>(dependencies: ValueNode<any>[], callback: Calc<any>): DerivedNode<T> {
-    return { n: MIN_SEQ, s: MIN_SEQ, v: undefined, d: dependencies, c: callback };
+function createDerivedNode<T>(dependencies: ValueNode<any>[], calculation: Calculation<any>): DerivedNode<T> {
+    return { current: MIN_SEQ, checked: MIN_SEQ, value: undefined, dependencies, calculation };
 }
 
 /** Construct a new effect node with the provided dependencies and action callback */
-function createEffectNode(dependencies: ValueNode<any>[], callback: Act): EffectNode {
-    return { n: MIN_SEQ, s: MIN_SEQ, d: dependencies, a: callback };
+function createEffectNode(dependencies: ValueNode<any>[], action: Action): EffectNode {
+    return { current: MIN_SEQ, checked: MIN_SEQ, dependencies, action };
 }
 
 /** Extract value node from signal metadata */
@@ -384,23 +384,23 @@ function asEffect(node: EffectNode): Effect & Meta<EffectNode> {
 }
 
 function isDerivedNode(node: Partial<DerivedNode<any>>) {
-    return node.c && node.d;
+    return node.calculation && node.dependencies;
 }
 
 function isEffectNode(node: Partial<EffectNode>) {
-    return node.a && node.d;
+    return node.action && node.dependencies;
 }
 
 /** 
  * Check dependent nodes for changes and return their latest values alongside the maximum 
  * sequence number they contain. 
 */
-function checkDependentNode(self: DependentNode, s: SequenceNumber): [any[], SequenceNumber] {
+function checkDependentNode(self: DependentNode, check: SequenceNumber): [any[], SequenceNumber] {
     let maxN = MIN_SEQ;
-    const values = Array.from(self.d, (x, _) => {
+    const values = Array.from(self.dependencies, (x, _) => {
         if (isDerivedNode(x)) {
             // DerivedNode
-            const [v, n] = checkDerivedNode(x as DerivedNode<any>, s);
+            const [v, n] = checkDerivedNode(x as DerivedNode<any>, check);
             if (maxN < n) {
                 maxN = n;
             }
@@ -408,8 +408,8 @@ function checkDependentNode(self: DependentNode, s: SequenceNumber): [any[], Seq
         } else {
             // ValueNode
             // Compare it to own sequence number. If it is newer then this node has changed.
-            if (maxN < x.n) maxN = x.n;
-            return x.v!;
+            if (maxN < x.current) maxN = x.current;
+            return x.value!;
         }
     });
 
@@ -420,70 +420,70 @@ function checkDependentNode(self: DependentNode, s: SequenceNumber): [any[], Seq
  * Performs dependency checks and calculates if it is outdated 
  * Returns the latest value and max sequence number.
 */
-function checkDerivedNode<T>(self: DerivedNode<T>, s: SequenceNumber): [T, SequenceNumber] {
-    let maxN = self.n;
-    if (s > self.s) {
+function checkDerivedNode<T>(self: DerivedNode<T>, check: SequenceNumber): [T, SequenceNumber] {
+    let maxN = self.current;
+    if (check > self.checked) {
         // Changes has occured somewhere. Check if any of the dependencies are affected.
-        const [values, n] = checkDependentNode(self, s);
+        const [values, n] = checkDependentNode(self, check);
 
-        if (self.n < n) {
+        if (self.current < n) {
             // Dependencies have changed or this is a new node. Recalculate.
-            self.v = self.c(values);
-            self.n = n;
+            self.value = self.calculation(values);
+            self.current = n;
             maxN = n;
         }
 
         // Derived nodes updates the sequence number each time a change check is performed.
         // Since dependencies are fixed, this will filter out unneccessary traversals.
-        self.s = s;
+        self.checked = check;
     }
-    return [self.v!, maxN];
+    return [self.value!, maxN];
 }
 
 /** Performs dependency checks and acts if it is outdated */
-function checkEffectNode(self: EffectNode, s: SequenceNumber): void {
-    if (s > self.s) {
+function checkEffectNode(self: EffectNode, check: SequenceNumber): void {
+    if (check > self.checked) {
         // Changes has occured somewhere. Check if any of the dependencies are affected.
-        const [values, n] = checkDependentNode(self, s);
+        const [values, n] = checkDependentNode(self, check);
 
-        if (self.n < n) {
+        if (self.current < n) {
             // Dependencies have changed or this is a new node. React.
-            self.a(values);
-            self.n = n;
+            self.action(values);
+            self.current = n;
     }
 
         // Effect nodes updates the sequence number each time a change check is performed.
         // Since dependencies are fixed, this will filter out unneccessary traversals.
-        self.s = s;
+        self.checked = check;
     }
 }
 
 /** Get value from a readonly value node. */
-function getValue<T>(this: ValueNode<T>, v?: T): T {
-    if (v) throw TypeError("Cannot modify a readonly signal");
+function getValue<T>(this: ValueNode<T>, value?: T): T {
+    if (value) throw TypeError("Cannot modify a readonly signal");
     if (denyReentry && !allowReentryReadWrite) throw new ReentryError(ERR_REENTRY_READ);
-    return this.v!;
+    return this.value!;
 }
 
 /** Get or set value on a writable value node. */
-function sgetValue<T>(this: ValueNode<T>, v?: T): T | void {
-    if (denyReentry && !allowReentryReadWrite) throw new ReentryError(v == undefined ? ERR_REENTRY_READ : ERR_REENTRY_WRITE);
-    if (v == undefined) return this.v!;
-    if (Object.is(this.v, v)) return;
-    this.v = v;
-    this.n = nextN();
+function sgetValue<T>(this: ValueNode<T>, value?: T): T | void {
+    if (denyReentry && !allowReentryReadWrite) throw new ReentryError(value == undefined ? ERR_REENTRY_READ : ERR_REENTRY_WRITE);
+    if (value == undefined) return this.value!;
+    if (Object.is(this.value, value)) return;
+    this.value = value;
+    this.current = nextN();
 }
 
 /** Set initial value for derived. */
-function initValue<T,F>(this: DerivedNode<T>, f:F, v:T): F {
-    if (!this.v) this.v = v;
-    return f;
+function initValue<T,F>(this: DerivedNode<T>, func:F, value:T): F {
+    if (!this.value) this.value = value;
+    return func;
 }
 
 /**  Performs a dependency check and calculates if it is outdated. Returns the current value. */
-function calcDerivedNode<T>(this: DerivedNode<T>, v?: T): T {
-    if (v) throw TypeError("Cannot modify a derived signal");
-    if (suspendExecution && this.v) return this.v;
+function calcDerivedNode<T>(this: DerivedNode<T>, value?: T): T {
+    if (value) throw TypeError("Cannot modify a derived signal");
+    if (suspendExecution && this.value) return this.value;
     if (suspendExecution) throw new SuspendError(ERR_SUSPEND_CALC);
     if (denyReentry && !allowReentryReadWrite) throw new ReentryError(ERR_REENTRY_READ);
 
