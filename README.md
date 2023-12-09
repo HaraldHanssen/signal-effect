@@ -24,11 +24,11 @@ Reactive signal library without any dependencies.
 
     ```signal```s and ```derived```s can be attached as properties to an object. Allows normal get/set coding.
 
-- **Recursion Prevention**
+- **Incorrect Usage**
 
-    Will throw error if ```derived``` calculations and ```effect``` actions try to reenter the signal system and e.g. grab values it does not depend upon.
+    Will throw error if ```derived``` calculations actions try to reenter the signal system and e.g. grab values it does not depend upon.
     
-    ```effect```s are allowed to write back to the signals again, this _will not_ cause endless recursion until stack overflow. The calculations and effects are just sampled.
+    ```effect```s are allowed to manually read and write back to the signals again, this _will not_ cause endless recursion until stack overflow. The calculations and effects are just snapshots. Also, the ```effect``` clause will not trigger when values are used directly inside the callback.
 
 - **Bulk Update**
 
@@ -123,9 +123,12 @@ log(); // outputs '42'
 ```
 
 ## TODOs
-- Return affected signals from the update method 
-- (DONE) Support writing to signals from effect calculations
-- (DONE) Throw error when setting a readonly signal directly. Should exhibit the same behavior as when it is used as a property.
+- [ ] Return affected signals from the update method.
+- [ ] Allow internal modification of objects and arrays without set. Avoids the need to reconstruct the entire object/array.
+- [ ] Push dirty flag to dependents. Would greatly benefit performance in a large signal set with frequent but minute changes. Tricky thing when it comes to GC though, will require weak referencing.
+- [x] Support reading (of independent) signals in effect calculations.
+- [x] Support writing to signals from effect calculations
+- [x] Throw error when setting a readonly signal directly. Should exhibit the same behavior as when it is used as a property.
 - ...
 
 

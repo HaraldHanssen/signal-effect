@@ -256,7 +256,7 @@ export class SuspendError extends SignalError {
 // Internals
 // Call tracking
 let denyReentry = false;
-let allowReentryWrite = false;
+let allowReentryReadWrite = false;
 const ERR_REENTRY_READ = "Reading a signal manually within a derived/effect callback is not allowed. Pass the signal as a dependency instead.";
 const ERR_REENTRY_WRITE = "Writing to a signal within a derived callback is not allowed";
 let suspendExecution = false;
@@ -448,15 +448,9 @@ function checkEffectNode(self: EffectNode, s: SequenceNumber): void {
 
         if (self.n < n) {
             // Dependencies have changed or this is a new node. React.
-            try {
-                allowReentryWrite = true;
-                self.a(values);
-                self.n = n;
-            }
-            finally {
-                allowReentryWrite = false;
-            }
-        }
+            self.a(values);
+            self.n = n;
+    }
 
         // Effect nodes updates the sequence number each time a change check is performed.
         // Since dependencies are fixed, this will filter out unneccessary traversals.
@@ -467,13 +461,13 @@ function checkEffectNode(self: EffectNode, s: SequenceNumber): void {
 /** Get value from a readonly value node. */
 function getValue<T>(this: ValueNode<T>, v?: T): T {
     if (v) throw TypeError("Cannot modify a readonly signal");
-    if (denyReentry) throw new ReentryError(ERR_REENTRY_READ);
+    if (denyReentry && !allowReentryReadWrite) throw new ReentryError(ERR_REENTRY_READ);
     return this.v!;
 }
 
 /** Get or set value on a writable value node. */
 function sgetValue<T>(this: ValueNode<T>, v?: T): T | void {
-    if (denyReentry && !(allowReentryWrite && v)) throw new ReentryError(v == undefined ? ERR_REENTRY_READ : ERR_REENTRY_WRITE);
+    if (denyReentry && !allowReentryReadWrite) throw new ReentryError(v == undefined ? ERR_REENTRY_READ : ERR_REENTRY_WRITE);
     if (v == undefined) return this.v!;
     if (Object.is(this.v, v)) return;
     this.v = v;
@@ -491,13 +485,20 @@ function calcDerivedNode<T>(this: DerivedNode<T>, v?: T): T {
     if (v) throw TypeError("Cannot modify a derived signal");
     if (suspendExecution && this.v) return this.v;
     if (suspendExecution) throw new SuspendError(ERR_SUSPEND_CALC);
-    if (denyReentry) throw new ReentryError(ERR_REENTRY_READ);
+    if (denyReentry && !allowReentryReadWrite) throw new ReentryError(ERR_REENTRY_READ);
+
+    // Store previous state, we might be inside the callback of an effect node.
+    const prevDenyReentry = denyReentry;
+    const prevAllowReentryReadWrite = allowReentryReadWrite;
     try {
         denyReentry = true;
+        allowReentryReadWrite = false;
         return checkDerivedNode(this, currN())[0];
     }
     finally {
-        denyReentry = false;
+        // Restore previous state
+        denyReentry = prevDenyReentry;
+        allowReentryReadWrite = prevAllowReentryReadWrite;
     }
 }
 
@@ -507,9 +508,11 @@ function actEffectNode(this: EffectNode): void {
     if (denyReentry) throw new ReentryError(ERR_REENTRY_READ);
     try {
         denyReentry = true;
+        allowReentryReadWrite = true;
         checkEffectNode(this, currN());
     }
     finally {
         denyReentry = false;
+        allowReentryReadWrite = false;
     }
 }
