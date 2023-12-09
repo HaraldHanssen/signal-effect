@@ -205,6 +205,65 @@ export function update(items: DerivedSignal<any>[] | Effect[]) {
 }
 
 /**
+ * The interface for handling execution.
+ * By default the {@link NoopExecution} is active.
+ **/
+export interface ExecutionHandler {
+    /** 
+     * Called each time a writable signal has changed, or when a derived or effect is added.
+     * Do not modify the signal in this callback!
+    */
+    changed(changed: WritableSignal<any>, deriveds: DerivedSignal<any>[] | undefined, effects: Effect[] | undefined): void;
+}
+
+/** The delayed execution handler stores the affected deriveds and effects and executes them when @see update is called. */
+export interface DelayedExecutionHandler extends ExecutionHandler {
+    /** Updates all affected deriveds and effects since last call. Returns them afterwards. */
+    update(): [DerivedSignal<any>[], Effect[]];
+}
+
+function createNoopExecutionHandler(): ExecutionHandler {
+    return { changed: () => {} };
+}
+
+function createImmediateExecutionHandler(): ExecutionHandler {
+    function changed(_: WritableSignal<any>, deriveds: DerivedSignal<any>[] | undefined, effects: Effect[] | undefined) {
+        deriveds?.forEach(x => x());
+        effects?.forEach(x => x());
+    }
+    return { changed };
+}
+
+function createDelayedExecutionHandler(): DelayedExecutionHandler {
+    let d = [] as DerivedSignal<any>[];
+    let e = [] as Effect[];
+    function changed(_: WritableSignal<any>, deriveds: DerivedSignal<any>[] | undefined, effects: Effect[] | undefined) {
+        if (deriveds) d.push(...deriveds);
+        if (effects) e.push(...effects);
+    }
+    function update(): [DerivedSignal<any>[], Effect[]] {
+        const deriveds = d;
+        const effects = e;
+        deriveds.forEach(x => x());
+        effects.forEach(x => x());
+        d = [];
+        e = [];
+        return [deriveds, effects];
+    }
+    return { changed, update };
+}
+
+/** The default execution handler. Does nothing. All deriveds and effects must either be called directly or through the {@link update} method. */
+export const NoopExecution = createNoopExecutionHandler();
+/** Optional execution handler. Calls derived and effects immediately upon change. */
+export const ImmediateExecution = createImmediateExecutionHandler();
+/** Optional execution handler. Gathers all deriveds and effects and executes them when the update method is called. */
+export const DelayedExecution = createDelayedExecutionHandler();
+
+/** The execution handler determines how the execution is performed. */
+export let executionHandler: ExecutionHandler = NoopExecution;
+
+/**
  * Suspend execution of derived signals and effects. Will remain suspended to their current state until
  * resume is called. Use this together with {@link update} to provide a controlled execution environment
  * for your end user. The repeating sequence can be similar to this broad sketch of a ui cycle:
@@ -437,7 +496,7 @@ function checkDependentNode(self: DependentNode, check: SequenceNumber): any[] {
 */
 function checkDerivedNode<T>(self: DerivedNode<T>, check: SequenceNumber): T {
     if (check > self.checked) {
-        const max = self.triggers.reduce((x,c) => x.current > c.current ? x : c).current;
+        const max = self.triggers.reduce((x, c) => x.current > c.current ? x : c).current;
         if (max > self.checked) {
             // Changes has occured in the dependencies.
             const values = checkDependentNode(self, check);
@@ -457,7 +516,7 @@ function checkDerivedNode<T>(self: DerivedNode<T>, check: SequenceNumber): T {
 /** Performs dependency checks and acts if it is outdated */
 function checkEffectNode(self: EffectNode, check: SequenceNumber): void {
     if (check > self.checked) {
-        const max = self.triggers.reduce((x,c) => x.current > c.current ? x : c).current;
+        const max = self.triggers.reduce((x, c) => x.current > c.current ? x : c).current;
         if (max > self.checked) {
             // Changes has occured in the dependencies.
             const values = checkDependentNode(self, check);
