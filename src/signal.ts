@@ -59,12 +59,8 @@ export interface WritableSignal<T> extends ReadableSignal<T> {
  * A derived signal will exist as long as there are other derived signals or effects
  * depending on it. To delete a derived signal, all those depending on it must be
  * removed as well.
- * 
- * Use the @see init method to set an initial value of the derived signal.
 */
 export interface DerivedSignal<T> extends ReadableSignal<T> {
-    /** Initialize the derived signal to a value. Might be necessary when the lifecycle methods are used. */
-    init<T>(v: T): DerivedSignal<T>
 }
 
 /**
@@ -264,37 +260,6 @@ export const DelayedExecution = createDelayedExecutionHandler();
 export let executionHandler: ExecutionHandler = NoopExecution;
 
 /**
- * Suspend execution of derived signals and effects. Will remain suspended to their current state until
- * resume is called. Use this together with {@link update} to provide a controlled execution environment
- * for your end user. The repeating sequence can be similar to this broad sketch of a ui cycle:
- * 
- * (1) suspend execution
- * (2) get current state of signals
- *     set new signals
- *     add signals and effects
- *     remove signals and effects
- * (3) resume execution
- *     update deriveds
- *     update effects
- *     update visual elements
- * (4) layout, render and user input
- * 
- * Step (2) is the presentation logic, (1) and (3) the presentation framework and (4) the browser.
- */
-export function suspend() {
-    if (denyReentry) throw new ReentryError(ERR_REENTRY_READ);
-    suspendExecution = true;
-}
-
-/**
- * Resumes execution of derived signals and effects. See {@link suspend} for more info.
- */
-export function resume() {
-    if (denyReentry) throw new ReentryError(ERR_REENTRY_READ);
-    suspendExecution = false;
-}
-
-/**
  * Base class for all signal related errors.
  */
 export class SignalError extends Error {
@@ -315,25 +280,12 @@ export class ReentryError extends SignalError {
     }
 }
 
-/**
- * Thrown if user is trying to execute an effect at a time where execution is suspended.
- */
-export class SuspendError extends SignalError {
-    constructor(message: string) {
-        super(message);
-        Object.setPrototypeOf(this, SuspendError.prototype);
-    }
-}
-
 // Internals
 // Call tracking
 let denyReentry = false;
 let allowReentryReadWrite = false;
 const ERR_REENTRY_READ = "Reading a signal manually within a derived/effect callback is not allowed. Pass the signal as a dependency instead.";
 const ERR_REENTRY_WRITE = "Writing to a signal within a derived callback is not allowed";
-let suspendExecution = false;
-const ERR_SUSPEND_ACT = "Executing an effect action when execution is suspended is not allowed. ";
-const ERR_SUSPEND_CALC = "Executing a derived calculation when execution is suspended is not allowed. Pass an initial value to the derived signal to avoid this error.";
 
 // Monotonically increasing sequence number
 type SequenceNumber = bigint;
@@ -398,9 +350,7 @@ type Meta<F> = {
     /** True if the provided function can be used as a setter */
     write?: boolean,
     /** True if the provided function will execute an effect action */
-    act?: boolean,
-    /** Can set an initial value to derived signals */
-    init?: any
+    act?: boolean
 };
 
 /** Traverses the dependency tree and extracts the nodes that will trigger changes to the tree. */
@@ -463,7 +413,6 @@ function asReadable<T>(node: ValueNode<T>): ReadableSignal<T> & Meta<ValueNode<T
 function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> & Meta<DerivedNode<T>> {
     let f = calcDerivedNode.bind(node) as DerivedSignal<T> & Meta<DerivedNode<T>>;
     Object.defineProperty(f, "_self", { value: node, writable: false });
-    Object.defineProperty(f, "init", { value: initValue.bind(node, f), writable: false });
     return f;
 }
 
@@ -548,17 +497,9 @@ function sgetValue<T>(this: ValueNode<T>, value?: T): T | void {
     this.current = nextN();
 }
 
-/** Set initial value for derived. */
-function initValue<T, F>(this: DerivedNode<T>, func: F, value: T): F {
-    if (!this.value) this.value = value;
-    return func;
-}
-
 /**  Performs a dependency check and calculates if it is outdated. Returns the current value. */
 function calcDerivedNode<T>(this: DerivedNode<T>, value?: T): T {
     if (value) throw TypeError("Cannot modify a derived signal");
-    if (suspendExecution && this.value) return this.value;
-    if (suspendExecution) throw new SuspendError(ERR_SUSPEND_CALC);
     if (denyReentry && !allowReentryReadWrite) throw new ReentryError(ERR_REENTRY_READ);
 
     // Store previous state, we might be inside the callback of an effect node.
@@ -578,7 +519,6 @@ function calcDerivedNode<T>(this: DerivedNode<T>, value?: T): T {
 
 /** Performs a dependency check and acts if it is outdated. */
 function actEffectNode(this: EffectNode): void {
-    if (suspendExecution) throw new SuspendError(ERR_SUSPEND_ACT);
     if (denyReentry) throw new ReentryError(ERR_REENTRY_READ);
     try {
         denyReentry = true;
