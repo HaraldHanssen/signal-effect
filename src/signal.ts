@@ -64,7 +64,7 @@ export interface WritableSignal<T> extends ReadableSignal<T> {
 */
 export interface DerivedSignal<T> extends ReadableSignal<T> {
     /** Initialize the derived signal to a value. Might be necessary when the lifecycle methods are used. */
-    init: (v: T) => DerivedSignal<T>
+    init<T>(v: T): DerivedSignal<T>
 }
 
 /**
@@ -188,7 +188,20 @@ export function propup(o: any, p: any, s: any): any {
  * Use this method at the appropriate time when these updates should occur. See {@link suspend} for more info.
  */
 export function update(items: DerivedSignal<any>[] | Effect[]) {
-    items.forEach(x => x());
+    type UpdateNode = Meta<DependentNode> & (() => unknown);
+
+    // Precheck the items before they are executed 
+    const current = currN();
+    (items as UpdateNode[]).filter(x => {
+        const self = x._self;
+        if (current > self.checked) {
+            if (self.triggers.some(y => y.current > self.checked)) {
+                return true;
+            }
+            self.checked = current;
+        }
+        return false;
+    }).forEach(x => x());
 }
 
 /**
