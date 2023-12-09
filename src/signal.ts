@@ -412,8 +412,7 @@ function isEffectNode(node: Partial<EffectNode>) {
 }
 
 /** 
- * Check dependent nodes for changes and return their latest values alongside the maximum 
- * sequence number they contain. 
+ * Check dependent nodes for changes and return their latest values. 
 */
 function checkDependentNode(self: DependentNode, check: SequenceNumber): any[] {
     return self.dependencies.map((x) => isDerivedNode(x) ? checkDerivedNode(x as DerivedNode<any>, check) : x.value!);
@@ -421,7 +420,7 @@ function checkDependentNode(self: DependentNode, check: SequenceNumber): any[] {
 
 /**
  * Performs dependency checks and calculates if it is outdated 
- * Returns the latest value and max sequence number.
+ * Returns the latest value.
 */
 function checkDerivedNode<T>(self: DerivedNode<T>, check: SequenceNumber): T {
     if (check > self.checked) {
