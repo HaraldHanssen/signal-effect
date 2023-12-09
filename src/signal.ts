@@ -44,7 +44,7 @@ export interface WritableSignal<T> extends ReadableSignal<T> {
     /** Value writer */
     (next: T): void,
     /** Metadata */
-    readonly write:true
+    readonly write: true
 }
 
 /**
@@ -64,7 +64,7 @@ export interface WritableSignal<T> extends ReadableSignal<T> {
 */
 export interface DerivedSignal<T> extends ReadableSignal<T> {
     /** Initialize the derived signal to a value. Might be necessary when the lifecycle methods are used. */
-    init: (v:T) => DerivedSignal<T>
+    init: (v: T) => DerivedSignal<T>
 }
 
 /**
@@ -83,7 +83,7 @@ export interface Effect {
     /** Effect action invoker. Will trigger the action if dependencies have changed. */
     (): void,
     /** Metadata */
-    readonly act:true
+    readonly act: true
 }
 
 // Convenience definitions to simplify function signatures using several signals as parameters
@@ -194,7 +194,7 @@ export function update(items: DerivedSignal<any>[] | Effect[]) {
 /**
  * Suspend execution of derived signals and effects. Will remain suspended to their current state until
  * resume is called. Use this together with {@link update} to provide a controlled execution environment
- * for your end user. The repeating sequence can be similar to broad sketch of a ui cycle:
+ * for your end user. The repeating sequence can be similar to this broad sketch of a ui cycle:
  * 
  * (1) suspend execution
  * (2) get current state of signals
@@ -288,9 +288,14 @@ type Node = {
 
 type DependentNode = Node & {
     /** The sequence number when it was last checked against dependencies. */
-    checked: SequenceNumber
-    /** The value dependencies */
-    dependencies: ValueNode<any>[]
+    checked: SequenceNumber,
+    /** The value dependencies this node directly depends on. */
+    dependencies: ValueNode<any>[],
+    /** 
+     * The writable dependencies that will trigger reevaluation.
+     * Derived calculations are filtered out.
+     */
+    triggers: ValueNode<any>[]
 };
 
 type ValueNode<T> = Node & {
@@ -326,6 +331,17 @@ type Meta<F> = {
     init?: any
 };
 
+/** Traverses the dependency tree and extracts the nodes that will trigger changes to the tree. */
+function addWritableDependencies(writables: ValueNode<any>[], dependencies: (ValueNode<any> & Partial<DependentNode>)[]) {
+    dependencies.forEach(x => {
+        if (x.dependencies) {
+            addWritableDependencies(writables, x.dependencies)
+        } else {
+            writables.push(x);
+        }
+    });
+}
+
 /** Construct a new value node for source signals */
 function createValueNode<T>(initial: T): ValueNode<T> {
     return { current: nextN(), value: initial };
@@ -333,12 +349,16 @@ function createValueNode<T>(initial: T): ValueNode<T> {
 
 /** Construct a new derived node with the provided dependencies and calculation callback */
 function createDerivedNode<T>(dependencies: ValueNode<any>[], calculation: Calculation<any>): DerivedNode<T> {
-    return { current: MIN_SEQ, checked: MIN_SEQ, value: undefined, dependencies, calculation };
+    const triggers = [] as ValueNode<any>[];
+    addWritableDependencies(triggers, dependencies);
+    return { current: MIN_SEQ, checked: MIN_SEQ, value: undefined, dependencies, triggers, calculation };
 }
 
 /** Construct a new effect node with the provided dependencies and action callback */
 function createEffectNode(dependencies: ValueNode<any>[], action: Action): EffectNode {
-    return { current: MIN_SEQ, checked: MIN_SEQ, dependencies, action };
+    const triggers = [] as ValueNode<any>[];
+    addWritableDependencies(triggers, dependencies);
+    return { current: MIN_SEQ, checked: MIN_SEQ, dependencies, triggers, action };
 }
 
 /** Extract value node from signal metadata */
@@ -371,7 +391,7 @@ function asReadable<T>(node: ValueNode<T>): ReadableSignal<T> & Meta<ValueNode<T
 function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> & Meta<DerivedNode<T>> {
     let f = calcDerivedNode.bind(node) as DerivedSignal<T> & Meta<DerivedNode<T>>;
     Object.defineProperty(f, "_self", { value: node, writable: false });
-    Object.defineProperty(f, "init", { value: initValue.bind(node,f), writable: false });
+    Object.defineProperty(f, "init", { value: initValue.bind(node, f), writable: false });
     return f;
 }
 
@@ -395,62 +415,45 @@ function isEffectNode(node: Partial<EffectNode>) {
  * Check dependent nodes for changes and return their latest values alongside the maximum 
  * sequence number they contain. 
 */
-function checkDependentNode(self: DependentNode, check: SequenceNumber): [any[], SequenceNumber] {
-    let maxN = MIN_SEQ;
-    const values = Array.from(self.dependencies, (x, _) => {
-        if (isDerivedNode(x)) {
-            // DerivedNode
-            const [v, n] = checkDerivedNode(x as DerivedNode<any>, check);
-            if (maxN < n) {
-                maxN = n;
-            }
-            return v;
-        } else {
-            // ValueNode
-            // Compare it to own sequence number. If it is newer then this node has changed.
-            if (maxN < x.current) maxN = x.current;
-            return x.value!;
-        }
-    });
-
-    return [values, maxN];
+function checkDependentNode(self: DependentNode, check: SequenceNumber): any[] {
+    return self.dependencies.map((x) => isDerivedNode(x) ? checkDerivedNode(x as DerivedNode<any>, check) : x.value!);
 }
 
 /**
  * Performs dependency checks and calculates if it is outdated 
  * Returns the latest value and max sequence number.
 */
-function checkDerivedNode<T>(self: DerivedNode<T>, check: SequenceNumber): [T, SequenceNumber] {
-    let maxN = self.current;
+function checkDerivedNode<T>(self: DerivedNode<T>, check: SequenceNumber): T {
     if (check > self.checked) {
-        // Changes has occured somewhere. Check if any of the dependencies are affected.
-        const [values, n] = checkDependentNode(self, check);
+        const max = self.triggers.reduce((x,c) => x.current > c.current ? x : c).current;
+        if (max > self.checked) {
+            // Changes has occured in the dependencies.
+            const values = checkDependentNode(self, check);
 
-        if (self.current < n) {
             // Dependencies have changed or this is a new node. Recalculate.
             self.value = self.calculation(values);
-            self.current = n;
-            maxN = n;
+            self.current = max;
         }
 
         // Derived nodes updates the sequence number each time a change check is performed.
         // Since dependencies are fixed, this will filter out unneccessary traversals.
         self.checked = check;
     }
-    return [self.value!, maxN];
+    return self.value!;
 }
 
 /** Performs dependency checks and acts if it is outdated */
 function checkEffectNode(self: EffectNode, check: SequenceNumber): void {
     if (check > self.checked) {
-        // Changes has occured somewhere. Check if any of the dependencies are affected.
-        const [values, n] = checkDependentNode(self, check);
+        const max = self.triggers.reduce((x,c) => x.current > c.current ? x : c).current;
+        if (max > self.checked) {
+            // Changes has occured in the dependencies.
+            const values = checkDependentNode(self, check);
 
-        if (self.current < n) {
             // Dependencies have changed or this is a new node. React.
             self.action(values);
-            self.current = n;
-    }
+            self.current = max;
+        }
 
         // Effect nodes updates the sequence number each time a change check is performed.
         // Since dependencies are fixed, this will filter out unneccessary traversals.
@@ -475,7 +478,7 @@ function sgetValue<T>(this: ValueNode<T>, value?: T): T | void {
 }
 
 /** Set initial value for derived. */
-function initValue<T,F>(this: DerivedNode<T>, func:F, value:T): F {
+function initValue<T, F>(this: DerivedNode<T>, func: F, value: T): F {
     if (!this.value) this.value = value;
     return func;
 }
@@ -493,7 +496,7 @@ function calcDerivedNode<T>(this: DerivedNode<T>, value?: T): T {
     try {
         denyReentry = true;
         allowReentryReadWrite = false;
-        return checkDerivedNode(this, currN())[0];
+        return checkDerivedNode(this, currN());
     }
     finally {
         // Restore previous state
