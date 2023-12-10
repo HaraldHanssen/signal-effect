@@ -21,7 +21,7 @@
  * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
  * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-import { ReentryError, propup, derived, effect, readonly, signal, signals, update, SignalError, ExecutionHandler, execution, ImmediateExecution, _private } from "./signal";
+import { ReentryError, propup, derived, effect, readonly, signal, signals, update, SignalError, ExecutionHandler, execution, ImmediateExecution, _private, DelayedExecution } from "./signal";
 
 const jestConsole = console;
 
@@ -498,7 +498,7 @@ test("deny effect to be transformed to a property", () => {
 });
 
 // Handlers
-test("immediate will calculate the derived upon creation and dependency change", () => {
+test("immediate handler will calculate the derived upon creation and dependency change", () => {
     withHandler(ImmediateExecution, () => {
         const [s, t] = signals(0, 2);
         let result = 0;
@@ -512,7 +512,7 @@ test("immediate will calculate the derived upon creation and dependency change",
         expect(result).toBe(42);
     });
 });
-test("immediate will act on the effect upon creation and dependency change", () => {
+test("immediate handler will act on the effect upon creation and dependency change", () => {
     withHandler(ImmediateExecution, () => {
         const [s, t] = signals(0, 2);
         const sum = derived(s, t, (x, y) => x + y);
@@ -523,6 +523,43 @@ test("immediate will act on the effect upon creation and dependency change", () 
         expect(result).toBe(42);
     });
 });
+
+test("delayed handler will calculate the derived upon update", () => {
+    const handler = DelayedExecution;
+    withHandler(handler, () => {
+        const [s, t] = signals(0, 2);
+        let result = 0;
+        derived(s, t, (x, y) => {
+            const r = x + y;
+            result = r;
+            return r;
+        });
+        expect(result).toBe(0);
+        handler.update();
+        expect(result).toBe(2);
+        s(40);
+        expect(result).toBe(2);
+        handler.update();
+        expect(result).toBe(42);
+    });
+});
+test("delayed handler will act on the effect upon update", () => {
+    const handler = DelayedExecution;
+    withHandler(handler, () => {
+        const [s, t] = signals(0, 2);
+        const sum = derived(s, t, (x, y) => x + y);
+        let result = 0;
+        effect(sum, (x) => result = x);
+        expect(result).toBe(0);
+        handler.update();
+        expect(result).toBe(2);
+        s(40);
+        expect(result).toBe(2);
+        handler.update();
+        expect(result).toBe(42);
+    });
+});
+
 
 // Examples
 
