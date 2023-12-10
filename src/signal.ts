@@ -205,7 +205,7 @@ export function propup(o: any, p: any, s: any): any {
 
 /**
  * Perform bulk update of the provided signals/effects. Only changed signals are propagated through.
- * Use this method at the appropriate time when these updates should occur. See {@link suspend} for more info.
+ * Use this method at a convenient time when the {@link NoopExecution} handler is used.
  */
 export function update(items: DerivedSignal<any>[] | Effect[]) {
     type UpdateNode = Meta<DependentNode> & (() => unknown);
@@ -226,7 +226,8 @@ export function update(items: DerivedSignal<any>[] | Effect[]) {
 
 /**
  * The interface for handling execution.
- * By default the {@link NoopExecution} is active.
+ * By default the {@link NoopExecution} is active, it requires manual {@link update}. Switch to a more appropriate
+ * execution handler for your scenario.
  **/
 export interface ExecutionHandler {
     /** 
@@ -235,7 +236,7 @@ export interface ExecutionHandler {
     changed(changed: ReadableSignal<any> | undefined, deriveds: DerivedSignal<any>[] | undefined, effects: Effect[] | undefined): void;
 }
 
-/** The delayed execution handler stores the affected deriveds and effects and executes them when @see update is called. */
+/** The delayed execution handler stores the affected deriveds and effects and executes them when {@link update} is called. */
 export interface DelayedExecutionHandler extends ExecutionHandler {
     /** Updates all affected deriveds and effects since last call. Returns them afterwards. */
     update(): [DerivedSignal<any>[], Effect[]];
@@ -392,6 +393,30 @@ type Meta<F> = {
     act?: boolean
 };
 
+type Deref<T> = { deref: () => T | undefined }; 
+/** Loops through an array of weak references, cleans out GC'ed items and calls back for the live ones. */
+function deref<T>(array:Deref<T>[], callback: (t:T) => void) {
+    for (let i = 0; i < array.length; i++) {
+        const weak = array[i];
+        const inst = weak.deref();
+        if (!inst) {
+            // dead
+            const end = array.length - 1;
+            if (i < end) {
+                //more elements after this one, swap in last element
+                array[i] = array[end];
+            }
+            // remove last element
+            array.length = end;
+            // one step back
+            i--;
+            continue; // i++;
+        }
+
+        callback(inst);
+    }
+}
+
 /** Traverses the dependency tree and extracts the nodes that will trigger changes to the tree. */
 function addWritableDependencies(writables: SignalNode<any>[], dependencies: (ValueNode<any> & Partial<DependentNode>)[]) {
     dependencies.forEach(x => {
@@ -436,7 +461,7 @@ function extractWrite<T>(signal: ReadableSignal<T>): boolean {
     return (signal as unknown as Meta<SignalNode<T>>).write ?? false;
 }
 
-/** Wrap info in a writable facade */
+/** Wrap node in a writable facade */
 function asWritable<T>(node: SignalNode<T>): WritableSignal<T> & Meta<SignalNode<T>> {
     const f = sgetValue.bind(node) as WritableSignal<T> & Meta<SignalNode<T>>;
     Object.defineProperty(f, "id", { value: node.id, writable: false });
@@ -445,7 +470,7 @@ function asWritable<T>(node: SignalNode<T>): WritableSignal<T> & Meta<SignalNode
     return f;
 }
 
-/** Wrap info in a readable facade */
+/** Wrap node in a readable facade */
 function asReadable<T>(node: ValueNode<T>): ReadableSignal<T> & Meta<ValueNode<T>> {
     if (isDerivedNode(node) || isEffectNode(node)) throw new SignalError("Expected a writable signal.");
     const f = getValue.bind(node) as ReadableSignal<T> & Meta<SignalNode<T>>;
@@ -454,7 +479,7 @@ function asReadable<T>(node: ValueNode<T>): ReadableSignal<T> & Meta<ValueNode<T
     return f;
 }
 
-/** Wrap info in a derived facade */
+/** Wrap node in a derived facade */
 function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> & Meta<DerivedNode<T>> {
     let f = calcDerivedNode.bind(node) as DerivedSignal<T> & Meta<DerivedNode<T>>;
     Object.defineProperty(f, "id", { value: node.id, writable: false });
@@ -462,7 +487,7 @@ function asDerived<T>(node: DerivedNode<T>): DerivedSignal<T> & Meta<DerivedNode
     return f;
 }
 
-/** Wrap info in an effect facade */
+/** Wrap node in an effect facade */
 function asEffect(node: EffectNode): Effect & Meta<EffectNode> {
     let f = actEffectNode.bind(node) as Effect & Meta<EffectNode>;
     Object.defineProperty(f, "id", { value: node.id, writable: false });
@@ -546,32 +571,14 @@ function sgetValue<T>(this: SignalNode<T>, value?: T): T | void {
     // Notify execution handler
     const deriveds = [] as DerivedSignal<any>[];
     const effects = [] as Effect[];
-    const dependents = this.dependents;
-    for (let i = 0; i < dependents.length; i++) {
-        const x = dependents[i];
-        const d = x.deref();
-        if (!d) {
-            // dead
-            const end = dependents.length - 1;
-            if (i < end) {
-                //more elements after this one, swap in last element
-                dependents[i] = dependents[end];
-            }
-            // remove last element
-            dependents.length = end;
-            // one step back
-            i--;
-            continue; // i++;
-        }
-
+    deref(this.dependents, (d) => {
         if (isDerivedNode(d)) {
             deriveds.push(asDerived(d as DerivedNode<any>));
         }
         else {
             effects.push(asEffect(d as EffectNode));
         }
-    }
-
+    });
     execution.handler.changed(asReadable(this), deriveds, effects);
 }
 
@@ -607,4 +614,9 @@ function actEffectNode(this: EffectNode): void {
         denyReentry = false;
         allowReentryReadWrite = false;
     }
+}
+
+/** For testing purposes */
+export const _private = {
+    deref
 }

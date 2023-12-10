@@ -21,16 +21,16 @@
  * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
  * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-import { ReentryError, propup, derived, effect, readonly, signal, signals, update, SignalError, ExecutionHandler, execution, ImmediateExecution } from "./signal";
+import { ReentryError, propup, derived, effect, readonly, signal, signals, update, SignalError, ExecutionHandler, execution, ImmediateExecution, _private } from "./signal";
 
 const jestConsole = console;
 
 beforeEach(() => {
-  global.console = require('console');
+    global.console = require('console');
 });
 
 afterEach(() => {
-  global.console = jestConsole;
+    global.console = jestConsole;
 });
 
 function withHandler(handler: ExecutionHandler, action: () => void) {
@@ -440,13 +440,13 @@ test("allow reentry to write in effect actions (even in a feedback loop)", () =>
 
     // In this test setup sourceA affects sourceB and vice versa.
     const iters = 5;
-    const expected = [] as { a: number, b: number}[]; 
+    const expected = [] as { a: number, b: number }[];
     let expSourceA = 1;
     let expSourceB = 1;
     for (let i = 0; i < iters; i++) {
         expSourceB = expSourceA + 1;
         expSourceA = expSourceB + 2;
-        expected.push({ a: expSourceA, b: expSourceB});
+        expected.push({ a: expSourceA, b: expSourceB });
     }
 
     const sourceA = signal(1);
@@ -594,3 +594,47 @@ test("example create an effect action that triggers when signals change", () => 
     expect(acted).toBe(2);
 });
 
+// Internals
+test("deref only removes dead references", () => {
+    class Weak {
+        v: number;
+        deref: () => number | undefined;
+        constructor(v: number) {
+            this.v = v;
+            this.deref = () => (v % 2) > 0 ? v : undefined;
+        }
+    }
+
+    const empty = [] as Weak[];
+    _private.deref(empty, () => { throw Error("called"); });
+    expect(empty.length).toBe(0);
+
+    const one_dead = [new Weak(2)];
+    _private.deref(one_dead, () => { throw Error("called"); });
+    expect(one_dead.length).toBe(0);
+
+    const one_live = [new Weak(1)];
+    const one_live_result = [] as number[];
+    _private.deref(one_live, (x) => { one_live_result.push(x); });
+    expect(one_live.map(x => x.v)).toEqual([1]);
+    expect(one_live_result).toEqual([1]);
+
+    const two = [new Weak(1), new Weak(2)];
+    const two_result = [] as number[];
+    _private.deref(two, (x) => { two_result.push(x); });
+    expect(two.map(x => x.v)).toEqual([1]);
+    expect(two_result).toEqual([1]);
+
+    const three = [new Weak(1), new Weak(2), new Weak(3)];
+    const three_result = [] as number[];
+    _private.deref(three, (x) => { three_result.push(x); });
+    expect(three.map(x => x.v)).toEqual([1, 3]);
+    expect(three_result).toEqual([1, 3]);
+
+    // Order is not important
+    const ten = [...Array(10).keys()].map(x => new Weak(x+1)); // 1 .. 10
+    const ten_result = [] as number[];
+    _private.deref(ten, (x) => { ten_result.push(x); });
+    expect(ten.map(x => x.v)).toEqual([1, 9, 3, 7, 5]);
+    expect(ten_result).toEqual([1, 9, 3, 7, 5]);
+});
