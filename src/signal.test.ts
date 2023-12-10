@@ -21,7 +21,7 @@
  * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
  * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-import { ReentryError, propup, derived, effect, readonly, signal, signals, update, SignalError, ExecutionHandler, execution, ImmediateExecution, _private, DelayedExecution, drop, ReadableSignal } from "./signal";
+import { ReentryError, propup, derived, effect, readonly, signal, signals, update, SignalError, ExecutionHandler, execution, ImmediateExecution, _private, DelayedExecution, drop, ReadableSignal, DelayedExecutionHandler } from "./signal";
 
 const jestConsole = console;
 
@@ -714,44 +714,66 @@ describe("Performance", () => {
         2000: [-2, 1, -4, -4],
         2500: [-2, -4, 2, 3],
     } as Record<number, number[]>;
+
+    function run(name: string, layers: number, handler:DelayedExecutionHandler|undefined = undefined):void {
+        const start = {
+            a: signal(1),
+            b: signal(2),
+            c: signal(3),
+            d: signal(4),
+        };
+
+        let layer = start as { 
+            a: ReadableSignal<number>,
+            b: ReadableSignal<number>,
+            c: ReadableSignal<number>,
+            d: ReadableSignal<number>,
+        };
+
+        for (let i = layers; i--;) {
+            layer = ((m) => {
+                return {
+                    a: derived(m.b, (b) => b),
+                    b: derived(m.a, m.c, (a, c) => a - c),
+                    c: derived(m.b, m.d, (b, d) => b + d),
+                    d: derived(m.c, (c) => c),
+                };
+            })(layer);
+        }
+
+        const startTime = performance.now();
+
+        start.a(4), start.b(3), start.c(2), start.d(1);
+        handler?.update();
+
+        const end = layer;
+        const solution = [end.a(), end.b(), end.c(), end.d()];
+        const endTime = performance.now() - startTime;
+        console.log(name, endTime.toFixed(2) + " ms", solution);
+
+        expect(SOLUTIONS[layers]).toEqual(solution);
+    }
+
     Object.keys(SOLUTIONS).forEach(x => {
-        const layers:number = Number(x);
-        test(`${layers} layers`, () => {
-            const start = {
-                a: signal(1),
-                b: signal(2),
-                c: signal(3),
-                d: signal(4),
-            };
-    
-            let layer = start as { 
-                a: ReadableSignal<number>,
-                b: ReadableSignal<number>,
-                c: ReadableSignal<number>,
-                d: ReadableSignal<number>,
-            };
-    
-            for (let i = layers; i--;) {
-                layer = ((m) => {
-                    return {
-                        a: derived(m.b, (b) => b),
-                        b: derived(m.a, m.c, (a, c) => a - c),
-                        c: derived(m.b, m.d, (b, d) => b + d),
-                        d: derived(m.c, (c) => c),
-                    };
-                })(layer);
-            }
-    
-            const startTime = performance.now();
-    
-            start.a(4), start.b(3), start.c(2), start.d(1);
-    
-            const end = layer;
-            const solution = [end.a(), end.b(), end.c(), end.d()];
-            const endTime = performance.now() - startTime;
-            console.log(layers, endTime, solution);
-    
-            expect(SOLUTIONS[layers]).toEqual(solution);
+        const name = `noop ${x} layers`;
+        test(name, () => {
+            run(name, Number(x));
         });    
     });
+
+    Object.keys(SOLUTIONS).forEach(x => {
+        const name = `immediate ${x} layers`;
+        test(name, () => {
+            withHandler(ImmediateExecution, () => run(name, Number(x)));
+        });    
+    });
+
+    Object.keys(SOLUTIONS).forEach(x => {
+        const name = `delayed ${x} layers`;
+        test(name, () => {
+            const handler = DelayedExecution;
+            withHandler(handler, () => run(name, Number(x), handler));
+        });    
+    });
+
 });
