@@ -749,27 +749,27 @@ describe("Performance", () => {
         const end = layer;
         const solution = [end.a(), end.b(), end.c(), end.d()];
         const endTime = performance.now() - startTime;
-        console.log(name, endTime.toFixed(2) + " ms", solution);
+        console.log(name, endTime.toFixed(2) + " ms");
 
         expect(SOLUTIONS[layers]).toEqual(solution);
     }
 
     Object.keys(SOLUTIONS).forEach(x => {
-        const name = `noop ${x} layers`;
+        const name = `noop ${("  " + x).slice(-4)} layers`;
         test(name, () => {
             run(name, Number(x));
         });    
     });
 
     Object.keys(SOLUTIONS).forEach(x => {
-        const name = `immediate ${x} layers`;
+        const name = `immediate ${("  " + x).slice(-4)} layers`;
         test(name, () => {
             withHandler(ImmediateExecution, () => run(name, Number(x)));
         });    
     });
 
     Object.keys(SOLUTIONS).forEach(x => {
-        const name = `delayed ${x} layers`;
+        const name = `delayed ${("  " + x).slice(-4)} layers`;
         test(name, () => {
             const handler = DelayedExecution;
             withHandler(handler, () => run(name, Number(x), handler));
