@@ -576,17 +576,18 @@ function sgetValue<T>(this: SignalNode<T>, value?: T): T | void {
 
     // Notify execution handler
     const noop = execution.handler === NoopExecution;
+    const deriveds = [] as DerivedSignal<any>[];
+    const effects = [] as Effect[];
+    deref(this.dependents, (d) => {
+        if (noop) return;
+        if (isDerivedNode(d)) {
+            deriveds.push(asDerived(d as DerivedNode<any>));
+        }
+        else {
+            effects.push(asEffect(d as EffectNode));
+        }
+    });
     if (!noop) {
-        const deriveds = [] as DerivedSignal<any>[];
-        const effects = [] as Effect[];
-        deref(this.dependents, (d) => {
-            if (isDerivedNode(d)) {
-                deriveds.push(asDerived(d as DerivedNode<any>));
-            }
-            else {
-                effects.push(asEffect(d as EffectNode));
-            }
-        });
         execution.handler.changed(asReadable(this), deriveds, effects);
     }
 }
