@@ -147,7 +147,7 @@ export function derived(...args: any[]): any {
         if (args.length == 2 && Array.isArray(args[0])) {
             return [args[0].map(extractValueNode), args.slice(-1)[0]];
         }
-    
+
         const cb = args.slice(-1)[0] as ((...a: any[]) => any);
         return [args.slice(0, -1).map(extractValueNode), (a: any[]) => cb(...a)];
     }
@@ -393,9 +393,9 @@ type Meta<F> = {
     act?: boolean
 };
 
-type Deref<T> = { deref: () => T | undefined }; 
+type Deref<T> = { deref: () => T | undefined };
 /** Loops through an array of weak references, cleans out GC'ed items and calls back for the live ones. */
-function deref<T>(array:Deref<T>[], callback: (t:T) => void) {
+function deref<T>(array: Deref<T>[], callback: (t: T) => void) {
     for (let i = 0; i < array.length; i++) {
         const weak = array[i];
         const inst = weak.deref();
