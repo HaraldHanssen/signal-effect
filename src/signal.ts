@@ -123,12 +123,11 @@ export function readonly<T>(signal: WritableSignal<T>): ReadableSignal<T> {
 /** 
  * Create a derived/calculated signal from one or more sources.
  * 
- * To avoid recursion the calculation function is not allowed to reenter the signal system,
+ * To avoid side effects the calculation function is not allowed to reenter the signal system,
  * this means the provided callback must avoid to manually
  * (a) get a value from a writable/readonly/derived signal, or
  * (b) set a value on a writable, or
  * (c) execute an effect.
- * Using a delayed reentry with e.g. {@link setTimeout} is allowed but not encouraged; this kind of code can get messy.
 */
 export function derived<P extends ReadableSignalType, T>(r: P, calc: (r: ReadableSignalValue<P>) => T): DerivedSignal<T>;
 export function derived<P1 extends ReadableSignalType, P2 extends ReadableSignalType, T>
@@ -160,12 +159,8 @@ export function derived(...args: any[]): any {
 /** 
  * Create an effect/action from one or more sources.
  * 
- * To avoid recursion the action function is not allowed to reenter the signal system,
- * this means the provided callback must avoid to manually
- * (a) get a value from a writable/readonly/derived signal, or
- * (b) execute an effect.
- * Writing new values to signals are allowed.
- * Using a delayed reentry with e.g. {@link setTimeout} is allowed but not encouraged; this kind of code can get messy.
+ * To avoid side effects the action function is not allowed to reenter the signal system
+ * to manually execute an effect. Reading and writing values to signals are allowed.
 */
 export function effect<P extends ReadableSignalType>(r: P, act: (r: ReadableSignalValue<P>) => void): Effect;
 export function effect<P1 extends ReadableSignalType, P2 extends ReadableSignalType>
