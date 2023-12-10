@@ -708,12 +708,11 @@ describe("Performance", () => {
     // From https://github.com/maverick-js/signals/blob/main/bench/layers.js
     const SOLUTIONS = {
         10: [2, 4, -2, -3],
-        30: [-4, -3, -2, -1],
-        //100: [-2, -4, 2, 3], 
-        //500: [-2, 1, -4, -4],
-        //1000: [-2, -4, 2, 3],
-        //2000: [-2, 1, -4, -4],
-        // 2500: [-2, -4, 2, 3],
+        100: [-2, -4, 2, 3], 
+        500: [-2, 1, -4, -4],
+        1000: [-2, -4, 2, 3],
+        2000: [-2, 1, -4, -4],
+        2500: [-2, -4, 2, 3],
     } as Record<number, number[]>;
     Object.keys(SOLUTIONS).forEach(x => {
         const layers:number = Number(x);

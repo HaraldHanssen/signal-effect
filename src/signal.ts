@@ -201,7 +201,7 @@ export function propup(o: any, p: any, s: any): any {
 /** Drops an effect or derived from execution handling. */
 export function drop(effectOrDerived: Effect | DerivedSignal<any>) {
     const node = extractDependentNode(effectOrDerived);
-    node.triggers.forEach(x => {
+    Object.values(node.triggers).forEach(x => {
         const i = x.dependents.findIndex(y => y.deref() === node);
         if (i >= 0) delete x.dependents[i];
     });
@@ -220,7 +220,7 @@ export function update(items: DerivedSignal<any>[] | Effect[]) {
         .filter(x => {
             const self = x._self;
             if (current > self.checked) {
-                if (self.triggers.some(y => y.current > self.checked)) {
+                if (Object.values(self.triggers).some(y => y.current > self.checked)) {
                     return true;
                 }
                 self.checked = current;
@@ -358,7 +358,7 @@ type DependentNode = Node & {
      * The writable dependencies that will trigger reevaluation.
      * Derived calculations are filtered out.
      */
-    triggers: SignalNode<any>[]
+    triggers: Record<NodeId, SignalNode<any>>
 };
 
 type ValueNode<T> = Node & {
@@ -424,14 +424,18 @@ function deref<T>(array: Deref<T>[], callback: (t: T) => void) {
 }
 
 /** Traverses the dependency tree and extracts the nodes that will trigger changes to the tree. */
-function addWritableDependencies(writables: SignalNode<any>[], dependencies: (ValueNode<any> & Partial<DependentNode>)[]) {
-    dependencies.forEach(x => {
-        if (x.dependencies) {
-            addWritableDependencies(writables, x.dependencies)
+function extractWritableDependencies(dependencies: (ValueNode<any> & Partial<DependentNode>)[]): Record<NodeId, SignalNode<any>> {
+    const triggers = {} as Record<NodeId, SignalNode<any>>;
+
+    for (let i = 0; i < dependencies.length; i++) {
+        const x = dependencies[i];
+        if (x.triggers) {
+            Object.assign(triggers, x.triggers, triggers);
         } else {
-            writables.push(x as SignalNode<any>);
+            triggers[x.id] = x as SignalNode<any>;
         }
-    });
+    }
+    return triggers;
 }
 
 /** Construct a new value node for source signals */
@@ -441,19 +445,17 @@ function createSignalNode<T>(initial: T): SignalNode<T> {
 
 /** Construct a new derived node with the provided dependencies and calculation callback */
 function createDerivedNode<T>(dependencies: ValueNode<any>[], calculation: Calculation<any>): DerivedNode<T> {
-    const triggers = [] as SignalNode<any>[];
-    addWritableDependencies(triggers, dependencies);
+    const triggers = extractWritableDependencies(dependencies);
     const node: DerivedNode<T> = { id: nextId(), current: MIN_SEQ, checked: MIN_SEQ, value: undefined, dependencies, triggers, calculation };
-    triggers.forEach(x => x.dependents.push(new WeakRef(node)));
+    Object.values(triggers).forEach(x => x.dependents.push(new WeakRef(node)));
     return node;
 }
 
 /** Construct a new effect node with the provided dependencies and action callback */
 function createEffectNode(dependencies: ValueNode<any>[], action: Action): EffectNode {
-    const triggers = [] as SignalNode<any>[];
-    addWritableDependencies(triggers, dependencies);
+    const triggers = extractWritableDependencies(dependencies);
     const node = { id: nextId(), current: MIN_SEQ, checked: MIN_SEQ, dependencies, triggers, action };
-    triggers.forEach(x => x.dependents.push(new WeakRef(node)));
+    Object.values(triggers).forEach(x => x.dependents.push(new WeakRef(node)));
     return node;
 }
 
@@ -521,7 +523,7 @@ function isEffectNode(node: Partial<EffectNode>): boolean {
 */
 function checkDerivedNode<T>(self: DerivedNode<T>, check: SequenceNumber): T {
     if (check > self.checked) {
-        const max = self.triggers.reduce((x, c) => x.current > c.current ? x : c).current;
+        const max = Object.values(self.triggers).reduce((x, c) => x.current > c.current ? x : c).current;
         if (max > self.checked) {
             // Changes has occured in the dependencies.
             const values = self.dependencies.map((x) => isDerivedNode(x) ? checkDerivedNode(x as DerivedNode<any>, check) : x.value!);
@@ -541,7 +543,7 @@ function checkDerivedNode<T>(self: DerivedNode<T>, check: SequenceNumber): T {
 /** Performs dependency checks and acts if it is outdated */
 function checkEffectNode(self: EffectNode, check: SequenceNumber): void {
     if (check > self.checked) {
-        const max = self.triggers.reduce((x, c) => x.current > c.current ? x : c).current;
+        const max = Object.values(self.triggers).reduce((x, c) => x.current > c.current ? x : c).current;
         if (max > self.checked) {
             // Changes has occured in the dependencies.
             const values = self.dependencies.map((x) => isDerivedNode(x) ? checkDerivedNode(x as DerivedNode<any>, check) : x.value!);
