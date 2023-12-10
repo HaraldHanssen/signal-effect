@@ -21,7 +21,7 @@
  * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
  * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-import { ReentryError, propup, derived, effect, readonly, signal, signals, update, SignalError, ExecutionHandler, execution, ImmediateExecution, _private, DelayedExecution, drop } from "./signal";
+import { ReentryError, propup, derived, effect, readonly, signal, signals, update, SignalError, ExecutionHandler, execution, ImmediateExecution, _private, DelayedExecution, drop, ReadableSignal } from "./signal";
 
 const jestConsole = console;
 
@@ -54,7 +54,7 @@ describe("Basics", () => {
         s(43);
         expect(s()).toBe(43);
     });
-    
+
     test("get readonly value", () => {
         const s = signal(42);
         const r = readonly(s);
@@ -62,7 +62,7 @@ describe("Basics", () => {
         s(43);
         expect(r()).toBe(43);
     });
-    
+
     test("calc derived value of 1 signal", () => {
         let calculated = 0;
         const s = signal(42);
@@ -145,7 +145,7 @@ describe("Basics", () => {
         expect(d()).toBe(86);
         expect(calculated).toBe(3);
     });
-    
+
     test("act effect of 1 signal", () => {
         let acted = 0;
         const s = signal(42);
@@ -224,7 +224,7 @@ describe("Basics", () => {
         e();
         expect(acted).toBe(3);
     });
-    
+
     test("update of derived will only trigger once per provided element", () => {
         let calculated = 0;
         const [s, t, u] = signals(42, 4, 2);
@@ -267,7 +267,7 @@ describe("Basics", () => {
     test("update of derived will trigger for transitive dependency change", () => {
         let calculated = 0;
         const [s, t, u] = signals(42, 4, 2);
-    
+
         const a = derived(s, t, (x, y) => {
             calculated++;
             return x + y;
@@ -293,7 +293,7 @@ describe("Basics", () => {
         expect(b()).toBe(2 * 3);
         expect(a()).toBe(42 + 4);
     });
-    
+
     test("update of effect will only trigger once per provided element", () => {
         let acted = 0;
         let calculated = 0;
@@ -338,7 +338,7 @@ describe("Basics", () => {
         let calculated = 0;
         let r1 = 0;
         const [s, t, u] = signals(42, 4, 2);
-    
+
         const a = derived(s, t, (x, y) => {
             calculated++;
             return x + y;
@@ -367,13 +367,13 @@ describe("Basics", () => {
     });
 });
 
-describe("Permissions",() => {
+describe("Permissions", () => {
     test("deny readonly wrapping of a derived signal", () => {
         const s = signal(42);
         const a = derived(s, (x) => x);
         expect(() => readonly(a as any)).toThrow(SignalError);
     });
-    
+
     test("deny reentry in derived calculations", () => {
         const s = signal(42);
         const justCalc = derived(s, (x) => x);
@@ -385,7 +385,7 @@ describe("Permissions",() => {
         });
         const enterCalc = derived(s, (_) => justCalc());
         const enterAct = derived(s, (_) => justAct());
-    
+
         for (let i = 42; i < 45; i++) {
             s(i);
             expect(enterGet).toThrow(ReentryError);
@@ -397,14 +397,14 @@ describe("Permissions",() => {
             expect(enterAct).toThrow(ReentryError);
             expect(justCalc()).toBe(i); // Not denied
         }
-    
+
     });
     test("deny reentry to execute in effect actions", () => {
         const s = signal(42);
         const justCalc = derived(s, (x) => x);
         const justAct = effect(s, () => { });
         const enterAct = effect(s, () => justAct());
-    
+
         for (let i = 42; i < 45; i++) {
             s(i);
             expect(justCalc()).toBe(i);
@@ -421,7 +421,7 @@ describe("Permissions",() => {
         const enterGet = effect(s, (x) => enterGetResult = x + t());
         let enterCalcResult = 0;
         const enterCalc = effect(s, (x) => enterCalcResult = x + justCalc());
-    
+
         for (let i = 42; i < 45; i++) {
             s(i);
             expect(enterGet).not.toThrow(ReentryError);
@@ -433,7 +433,7 @@ describe("Permissions",() => {
     test("allow reentry to write in effect actions (even in a feedback loop)", () => {
         // Writing can be set up as a feedback loop, in some type of calculations this
         // is ok (e.g. integration). The evaluation only samples the effect each execution.
-    
+
         // In this test setup sourceA affects sourceB and vice versa.
         const iters = 5;
         const expected = [] as { a: number, b: number }[];
@@ -444,14 +444,14 @@ describe("Permissions",() => {
             expSourceA = expSourceB + 2;
             expected.push({ a: expSourceA, b: expSourceB });
         }
-    
+
         const sourceA = signal(1);
         const justCalcA = derived(sourceA, (x) => x + 1);
         const enterSetB = effect(justCalcA, (x) => sourceB(x));
         const sourceB = signal(1);
         const justCalcB = derived(sourceB, (x) => x + 2);
         const enterSetA = effect(justCalcB, (x) => sourceA(x));
-    
+
         for (let i = 0; i < iters; i++) {
             if (i % 2 > 0) {
                 // make sure there are no sideeffects to calling the derived calculations
@@ -465,7 +465,7 @@ describe("Permissions",() => {
             expect(sourceB()).toBe(expected[i].b);
         }
     });
-    
+
     test("allow writable to be transformed to a property", () => {
         const o = propup({}, "signal", signal(42));
         expect(o.signal).toBe(42);
@@ -494,7 +494,7 @@ describe("Permissions",() => {
     });
 });
 
-describe("Handlers",() => {
+describe("Handlers", () => {
     test("immediate handler calculates the derived upon create and change", () => {
         withHandler(ImmediateExecution, () => {
             const [s, t] = signals(0, 2);
@@ -588,7 +588,7 @@ describe("Handlers",() => {
     });
 });
 
-describe("Examples",() => {
+describe("Examples", () => {
     test("example creating a signal", () => {
         const canAccept = signal(false);
         expect(canAccept()).toBe(false);
@@ -599,23 +599,23 @@ describe("Examples",() => {
         const canAccept = signal(false);
         const showAccept = readonly(canAccept);
         expect(showAccept()).toBe(false);
-    
+
         expect(() => (showAccept as any)(true)).toThrow(TypeError);
         expect(showAccept()).toBe(false);
-    
+
         canAccept(true);
         expect(showAccept()).toBe(true);
     });
     test("example expose signal as a property on an object", () => {
         const dialog = {} as any;
         propup(dialog, "name", signal(""));
-    
+
         dialog.name = "Douglas";
         expect(dialog.name).toBe("Douglas");
-    
+
         const canAccept = signal(false);
         propup(dialog, "canAccept", readonly(canAccept));
-    
+
         expect(dialog.canAccept).toBe(false);
         expect(() => dialog.canAccept = true).toThrow(TypeError);
     });
@@ -623,15 +623,15 @@ describe("Examples",() => {
         const name = signal("Douglas");
         const surname = signal("");
         const fullname = derived(name, surname, (n, s) => [n, s].join(" ").trim());
-    
+
         expect(fullname()).toBe("Douglas");
         surname("Adams");
         expect(fullname()).toBe("Douglas Adams");
-    
+
         // derived can also rely on other derived signals
         const uppercase = derived(fullname, (f) => f.toUpperCase());
         expect(uppercase()).toBe("DOUGLAS ADAMS");
-    
+
         // and it cannot be written to
         expect(() => (uppercase as any)("DA")).toThrow(TypeError);
     });
@@ -668,38 +668,92 @@ describe("Internals", () => {
                 this.deref = () => (v % 2) > 0 ? v : undefined;
             }
         }
-    
+
         const empty = [] as Weak[];
         _private.deref(empty, () => { throw Error("called"); });
         expect(empty.length).toBe(0);
-    
+
         const one_dead = [new Weak(2)];
         _private.deref(one_dead, () => { throw Error("called"); });
         expect(one_dead.length).toBe(0);
-    
+
         const one_live = [new Weak(1)];
         const one_live_result = [] as number[];
         _private.deref(one_live, (x) => { one_live_result.push(x); });
         expect(one_live.map(x => x.v)).toEqual([1]);
         expect(one_live_result).toEqual([1]);
-    
+
         const two = [new Weak(1), new Weak(2)];
         const two_result = [] as number[];
         _private.deref(two, (x) => { two_result.push(x); });
         expect(two.map(x => x.v)).toEqual([1]);
         expect(two_result).toEqual([1]);
-    
+
         const three = [new Weak(1), new Weak(2), new Weak(3)];
         const three_result = [] as number[];
         _private.deref(three, (x) => { three_result.push(x); });
         expect(three.map(x => x.v)).toEqual([1, 3]);
         expect(three_result).toEqual([1, 3]);
-    
+
         // Order is not important
-        const ten = [...Array(10).keys()].map(x => new Weak(x+1)); // 1 .. 10
+        const ten = [...Array(10).keys()].map(x => new Weak(x + 1)); // 1 .. 10
         const ten_result = [] as number[];
         _private.deref(ten, (x) => { ten_result.push(x); });
         expect(ten.map(x => x.v)).toEqual([1, 9, 3, 7, 5]);
         expect(ten_result).toEqual([1, 9, 3, 7, 5]);
+    });
+});
+
+describe.only("Performance", () => {
+    // From https://github.com/maverick-js/signals/blob/main/bench/layers.js
+    const SOLUTIONS = {
+        10: [2, 4, -2, -3],
+        30: [-4, -3, -2, -1],
+        //100: [-2, -4, 2, 3], 
+        //500: [-2, 1, -4, -4],
+        //1000: [-2, -4, 2, 3],
+        //2000: [-2, 1, -4, -4],
+        // 2500: [-2, -4, 2, 3],
+    } as Record<number, number[]>;
+    Object.keys(SOLUTIONS).forEach(x => {
+        const layers:number = Number(x);
+        test(`${layers} layers`, () => {
+            const start = {
+                a: signal(1),
+                b: signal(2),
+                c: signal(3),
+                d: signal(4),
+            };
+    
+            let layer = start as { 
+                a: ReadableSignal<number>,
+                b: ReadableSignal<number>,
+                c: ReadableSignal<number>,
+                d: ReadableSignal<number>,
+            };
+    
+            for (let i = layers; i--;) {
+                layer = ((m) => {
+                    return {
+                        a: derived(m.b, (b) => b),
+                        b: derived(m.a, m.c, (a, c) => a - c),
+                        c: derived(m.b, m.d, (b, d) => b + d),
+                        d: derived(m.c, (c) => c),
+                    };
+                })(layer);
+            }
+    
+            const startTime = performance.now();
+            console.log("start");
+    
+            start.a(4), start.b(3), start.c(2), start.d(1);
+    
+            const end = layer;
+            const solution = [end.a(), end.b(), end.c(), end.d()];
+            const endTime = performance.now() - startTime;
+            console.log(layers, endTime, solution);
+    
+            expect(SOLUTIONS[layers]).toEqual(solution);
+        });    
     });
 });
