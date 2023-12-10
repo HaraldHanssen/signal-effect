@@ -704,7 +704,7 @@ describe("Internals", () => {
     });
 });
 
-describe.only("Performance", () => {
+describe("Performance", () => {
     // From https://github.com/maverick-js/signals/blob/main/bench/layers.js
     const SOLUTIONS = {
         10: [2, 4, -2, -3],
@@ -744,7 +744,6 @@ describe.only("Performance", () => {
             }
     
             const startTime = performance.now();
-            console.log("start");
     
             start.a(4), start.b(3), start.c(2), start.d(1);
     

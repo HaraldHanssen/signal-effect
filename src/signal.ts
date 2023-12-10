@@ -216,16 +216,18 @@ export function update(items: DerivedSignal<any>[] | Effect[]) {
 
     // Precheck the items before they are executed 
     const current = currN();
-    (items as UpdateNode[]).filter(x => {
-        const self = x._self;
-        if (current > self.checked) {
-            if (self.triggers.some(y => y.current > self.checked)) {
-                return true;
+    (items as UpdateNode[])
+        .filter(x => {
+            const self = x._self;
+            if (current > self.checked) {
+                if (self.triggers.some(y => y.current > self.checked)) {
+                    return true;
+                }
+                self.checked = current;
             }
-            self.checked = current;
-        }
-        return false;
-    }).forEach(x => x());
+            return false;
+        })
+        .forEach(x => x());
 }
 
 /**
@@ -513,13 +515,6 @@ function isEffectNode(node: Partial<EffectNode>): boolean {
     return node.action !== undefined && node.dependencies !== undefined;
 }
 
-/** 
- * Check dependent nodes for changes and return their latest values. 
-*/
-function checkDependentNode(self: DependentNode, check: SequenceNumber): any[] {
-    return self.dependencies.map((x) => isDerivedNode(x) ? checkDerivedNode(x as DerivedNode<any>, check) : x.value!);
-}
-
 /**
  * Performs dependency checks and calculates if it is outdated 
  * Returns the latest value.
@@ -529,7 +524,7 @@ function checkDerivedNode<T>(self: DerivedNode<T>, check: SequenceNumber): T {
         const max = self.triggers.reduce((x, c) => x.current > c.current ? x : c).current;
         if (max > self.checked) {
             // Changes has occured in the dependencies.
-            const values = checkDependentNode(self, check);
+            const values = self.dependencies.map((x) => isDerivedNode(x) ? checkDerivedNode(x as DerivedNode<any>, check) : x.value!);
 
             // Dependencies have changed or this is a new node. Recalculate.
             self.value = self.calculation(values);
@@ -549,7 +544,7 @@ function checkEffectNode(self: EffectNode, check: SequenceNumber): void {
         const max = self.triggers.reduce((x, c) => x.current > c.current ? x : c).current;
         if (max > self.checked) {
             // Changes has occured in the dependencies.
-            const values = checkDependentNode(self, check);
+            const values = self.dependencies.map((x) => isDerivedNode(x) ? checkDerivedNode(x as DerivedNode<any>, check) : x.value!);
 
             // Dependencies have changed or this is a new node. React.
             self.action(values);
@@ -579,18 +574,17 @@ function sgetValue<T>(this: SignalNode<T>, value?: T): T | void {
 
     // Notify execution handler
     const noop = execution.handler === NoopExecution;
-    const deriveds = [] as DerivedSignal<any>[];
-    const effects = [] as Effect[];
-    deref(this.dependents, (d) => {
-        if (noop) return;
-        if (isDerivedNode(d)) {
-            deriveds.push(asDerived(d as DerivedNode<any>));
-        }
-        else {
-            effects.push(asEffect(d as EffectNode));
-        }
-    });
     if (!noop) {
+        const deriveds = [] as DerivedSignal<any>[];
+        const effects = [] as Effect[];
+        deref(this.dependents, (d) => {
+            if (isDerivedNode(d)) {
+                deriveds.push(asDerived(d as DerivedNode<any>));
+            }
+            else {
+                effects.push(asEffect(d as EffectNode));
+            }
+        });
         execution.handler.changed(asReadable(this), deriveds, effects);
     }
 }
