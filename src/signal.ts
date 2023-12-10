@@ -423,7 +423,7 @@ function deref<T>(array: Deref<T>[], callback: (t: T) => void) {
     }
 }
 
-/** Traverses the dependency tree and extracts the nodes that will trigger changes to the tree. */
+/** Extracts the nodes that can trigger changes. */
 function extractWritableDependencies(dependencies: (ValueNode<any> & Partial<DependentNode>)[]): Record<NodeId, SignalNode<any>> {
     const triggers = {} as Record<NodeId, SignalNode<any>>;
 
