@@ -142,14 +142,17 @@ export function derived<P1 extends ReadableSignalType, P2 extends ReadableSignal
 export function derived<P extends ReadableSignalTypes, T>(sources: P, calc: (values: ReadableSignalValues<P>) => T): DerivedSignal<T>
 export function derived(...args: any[]): any {
     if (args.length < 2) throw new SignalError("Expected at least 2 parameters!");
-    if (args.length == 2 && Array.isArray(args[0])) {
-        const d = asDerived(createDerivedNode(args[0].map(x => extractValueNode(x)), args.slice(-1)[0]));
-        execution.handler.changed(undefined, [d], undefined);
-        return d;
+
+    function fromArgs(): [ValueNode<any>[], Calculation<any>] {
+        if (args.length == 2 && Array.isArray(args[0])) {
+            return [args[0].map(extractValueNode), args.slice(-1)[0]];
+        }
+    
+        const cb = args.slice(-1)[0] as ((...a: any[]) => any);
+        return [args.slice(0, -1).map(extractValueNode), (a: any[]) => cb(...a)];
     }
 
-    const dd = args.slice(-1)[0] as ((...a: any[]) => any);
-    const d = asDerived(createDerivedNode(args.slice(0, -1).map(x => extractValueNode(x)), ((a: any[]) => dd(...a))));
+    const d = asDerived(createDerivedNode(...fromArgs()));
     execution.handler.changed(undefined, [d], undefined);
     return d;
 }
@@ -176,14 +179,17 @@ export function effect<P1 extends ReadableSignalType, P2 extends ReadableSignalT
 export function effect<P extends ReadableSignalTypes>(sources: P, act: (values: ReadableSignalValues<P>) => void): Effect
 export function effect(...args: any[]): any {
     if (args.length < 2) throw new SignalError("Expected at least 2 parameters!");
-    if (args.length == 2 && Array.isArray(args[0])) {
-        const e = asEffect(createEffectNode(args[0].map(x => extractValueNode(x)), args.slice(-1)[0]));
-        execution.handler.changed(undefined, undefined, [e]);
-        return e;
+
+    function fromArgs(): [ValueNode<any>[], Action] {
+        if (args.length == 2 && Array.isArray(args[0])) {
+            return [args[0].map(extractValueNode), args.slice(-1)[0]];
+        }
+
+        const cb = args.slice(-1)[0] as ((...a: any[]) => void);
+        return [args.slice(0, -1).map(extractValueNode), (a: any[]) => cb(...a)];
     }
 
-    const ee = args.slice(-1)[0] as ((...a: any[]) => void);
-    const e = asEffect(createEffectNode(args.slice(0, -1).map(x => extractValueNode(x)), ((a: any[]) => ee(...a))));
+    const e = asEffect(createEffectNode(...fromArgs()));
     execution.handler.changed(undefined, undefined, [e]);
     return e;
 }
@@ -537,7 +543,7 @@ function sgetValue<T>(this: SignalNode<T>, value?: T): T | void {
     this.value = value;
     this.current = nextN();
 
-    // Notify execution strategy
+    // Notify execution handler
     const deriveds = [] as DerivedSignal<any>[];
     const effects = [] as Effect[];
     const dependents = this.dependents;
