@@ -495,7 +495,7 @@ describe("Permissions",() => {
 });
 
 describe("Handlers",() => {
-    test("immediate handler will calculate the derived upon creation and dependency change", () => {
+    test("immediate handler calculates the derived upon create and change", () => {
         withHandler(ImmediateExecution, () => {
             const [s, t] = signals(0, 2);
             let result = 0;
@@ -509,7 +509,7 @@ describe("Handlers",() => {
             expect(result).toBe(42);
         });
     });
-    test("immediate handler will act on the effect upon creation and dependency change", () => {
+    test("immediate handler acts on the effect upon create and change", () => {
         withHandler(ImmediateExecution, () => {
             const [s, t] = signals(0, 2);
             const sum = derived(s, t, (x, y) => x + y);
@@ -520,7 +520,7 @@ describe("Handlers",() => {
             expect(result).toBe(42);
         });
     });
-    test("delayed handler will calculate the derived upon update", () => {
+    test("delayed handler calculates the derived upon update", () => {
         const handler = DelayedExecution;
         withHandler(handler, () => {
             const [s, t] = signals(0, 2);
@@ -539,7 +539,7 @@ describe("Handlers",() => {
             expect(result).toBe(42);
         });
     });
-    test("delayed handler will act on the effect upon update", () => {
+    test("delayed handler acts on the effect upon update", () => {
         const handler = DelayedExecution;
         withHandler(handler, () => {
             const [s, t] = signals(0, 2);
@@ -628,7 +628,7 @@ describe("Examples",() => {
 });
 
 describe("Internals", () => {
-    test("deref only removes dead references", () => {
+    test("deref function removes dead references", () => {
         class Weak {
             v: number;
             deref: () => number | undefined;

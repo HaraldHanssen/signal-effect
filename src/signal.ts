@@ -250,19 +250,19 @@ function createImmediateExecutionHandler(): ExecutionHandler {
 }
 
 function createDelayedExecutionHandler(): DelayedExecutionHandler {
-    let d = [] as DerivedSignal<any>[];
-    let e = [] as Effect[];
+    let d: Record<NodeId, DerivedSignal<any>> = {};
+    let e: Record<NodeId, Effect> = {};
     function changed(_: ReadableSignal<any> | undefined, deriveds: DerivedSignal<any>[] | undefined, effects: Effect[] | undefined) {
-        if (deriveds) d.push(...deriveds);
-        if (effects) e.push(...effects);
+        if (deriveds) deriveds.forEach(x => d[x.id] = x);
+        if (effects) effects.forEach(x => e[x.id] = x);
     }
     function update(): [DerivedSignal<any>[], Effect[]] {
-        const deriveds = d;
-        const effects = e;
+        const deriveds = Object.values(d);
+        const effects = Object.values(e);
         deriveds.forEach(x => x());
         effects.forEach(x => x());
-        d = [];
-        e = [];
+        d = {};
+        e = {};
         return [deriveds, effects];
     }
     return { changed, update };
