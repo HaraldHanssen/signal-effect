@@ -198,6 +198,15 @@ export function propup(o: any, p: any, s: any): any {
     return Object.defineProperty(o ?? {}, p, extractWrite(s) ? { get: s, set: s } : { get: s });
 }
 
+/** Drops an effect or derived from execution handling. */
+export function drop(effectOrDerived: Effect | DerivedSignal<any>) {
+    const node = extractDependentNode(effectOrDerived);
+    node.triggers.forEach(x => {
+        const i = x.dependents.findIndex(y => y.deref() === node);
+        if (i >= 0) delete x.dependents[i];
+    });
+}
+
 /**
  * Perform bulk update of the provided signals/effects. Only changed signals are propagated through.
  * Use this method at a convenient time when the {@link NoopExecution} handler is used.
@@ -393,7 +402,7 @@ type Deref<T> = { deref: () => T | undefined };
 function deref<T>(array: Deref<T>[], callback: (t: T) => void) {
     for (let i = 0; i < array.length; i++) {
         const weak = array[i];
-        const inst = weak.deref();
+        const inst = weak?.deref();
         if (!inst) {
             // dead
             const end = array.length - 1;
@@ -446,12 +455,17 @@ function createEffectNode(dependencies: ValueNode<any>[], action: Action): Effec
     return node;
 }
 
-/** Extract value node from signal metadata */
+/** Extract value node from metadata */
 function extractValueNode<T>(signal: ReadableSignal<T>): ValueNode<T> {
     return (signal as unknown as Meta<ValueNode<T>>)._self;
 }
 
-/** Extract write flag from signal metadata */
+/** Extract effect node from metadata */
+function extractDependentNode(signal: Effect | DerivedSignal<any>): DependentNode {
+    return (signal as unknown as Meta<DependentNode>)._self;
+}
+
+/** Extract write flag from metadata */
 function extractWrite<T>(signal: ReadableSignal<T>): boolean {
     return (signal as unknown as Meta<SignalNode<T>>).write ?? false;
 }
@@ -564,9 +578,11 @@ function sgetValue<T>(this: SignalNode<T>, value?: T): T | void {
     this.current = nextN();
 
     // Notify execution handler
+    const noop = execution.handler === NoopExecution;
     const deriveds = [] as DerivedSignal<any>[];
     const effects = [] as Effect[];
     deref(this.dependents, (d) => {
+        if (noop) return;
         if (isDerivedNode(d)) {
             deriveds.push(asDerived(d as DerivedNode<any>));
         }
@@ -574,7 +590,9 @@ function sgetValue<T>(this: SignalNode<T>, value?: T): T | void {
             effects.push(asEffect(d as EffectNode));
         }
     });
-    execution.handler.changed(asReadable(this), deriveds, effects);
+    if (!noop) {
+        execution.handler.changed(asReadable(this), deriveds, effects);
+    }
 }
 
 /**  Performs a dependency check and calculates if it is outdated. Returns the current value. */

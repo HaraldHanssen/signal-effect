@@ -32,9 +32,11 @@ Reactive signal library without any dependencies.
 
 - **GC Friendly**
 
-    The library _does not_ store any of the primitives in some internal bookkeeping structure. Remove your reference to a primitive and it will (eventually) be collected.
+    The library _does not_ store any of the primitives in global bookkeeping structures. Remove your reference to a primitive and it will (eventually) be collected.
     
     Remember though, dependency references in ```derived``` and ```effect``` still apply. The top nodes need to be unreferenced for the underlying structure to be collected.
+    
+    GC is unpredictable. With execution strategies other than the default **Noop**, it is necessary to _drop_ the primitives first to prevent unintended execution.
 
 - **Bulk Update**
 
@@ -149,7 +151,7 @@ handler.update(); // outputs '42'
 ```
 
 ## TODOs
-- [ ] Explicit removal of effects and deriveds (drop). Useful in Immediate/Delayed execution.
+- [x] Explicit removal of effects and deriveds (drop). Useful in Immediate/Delayed execution.
 - [ ] Allow internal modification of objects and arrays without set. Avoids the need to reconstruct the entire object/array.
 - [x] Custom execution handlers.
 - [x] Support reading (of independent) signals in effect calculations.

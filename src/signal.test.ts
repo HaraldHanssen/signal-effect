@@ -21,7 +21,7 @@
  * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
  * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-import { ReentryError, propup, derived, effect, readonly, signal, signals, update, SignalError, ExecutionHandler, execution, ImmediateExecution, _private, DelayedExecution } from "./signal";
+import { ReentryError, propup, derived, effect, readonly, signal, signals, update, SignalError, ExecutionHandler, execution, ImmediateExecution, _private, DelayedExecution, drop } from "./signal";
 
 const jestConsole = console;
 
@@ -555,6 +555,37 @@ describe("Handlers",() => {
             expect(result).toBe(42);
         });
     });
+    test("drop removes derived from execution handling", () => {
+        withHandler(ImmediateExecution, () => {
+            const [s, t] = signals(0, 2);
+            let result = 0;
+            const d = derived(s, t, (x, y) => {
+                const r = x + y;
+                result = r;
+                return r;
+            });
+            expect(result).toBe(2);
+            s(40);
+            expect(result).toBe(42);
+            drop(d);
+            s(20);
+            expect(result).toBe(42);
+        });
+    });
+    test("drop removes effect from execution handling", () => {
+        withHandler(ImmediateExecution, () => {
+            const [s, t] = signals(0, 2);
+            const sum = derived(s, t, (x, y) => x + y);
+            let result = 0;
+            const e = effect(sum, (x) => result = x);
+            expect(result).toBe(2);
+            s(40);
+            expect(result).toBe(42);
+            drop(e);
+            s(20);
+            expect(result).toBe(42);
+        });
+    });
 });
 
 describe("Examples",() => {
@@ -670,5 +701,5 @@ describe("Internals", () => {
         _private.deref(ten, (x) => { ten_result.push(x); });
         expect(ten.map(x => x.v)).toEqual([1, 9, 3, 7, 5]);
         expect(ten_result).toEqual([1, 9, 3, 7, 5]);
-    });    
+    });
 });
