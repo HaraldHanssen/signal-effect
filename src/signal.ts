@@ -218,7 +218,7 @@ export function drop(effectOrDerived: Effect | DerivedSignal<any>) {
  * Use this method at a convenient time when the {@link NoopExecution} handler is used.
  */
 export function update(items: DerivedSignal<any>[] | Effect[]) {
-    type UpdateNode = Meta<DependentNode> & (() => unknown);
+    type UpdateNode = Meta<CDependentNode> & (() => unknown);
 
     // Precheck the items before they are executed 
     const current = currN();
@@ -343,7 +343,7 @@ export function currN(): SequenceNumber {
     return seqN;
 }
 
-// Node information
+// Nodes and Dependencies
 
 abstract class CNode {
     /** Unique node id used for matching and lookup */
@@ -370,7 +370,7 @@ abstract class CDependentNode extends CNode {
      * The writable dependencies that will trigger reevaluation.
      * Derived calculations are filtered out.
      */
-    readonly triggers: Record<NodeId, SignalNode<any>>;
+    readonly triggers: Record<NodeId, CSignalNode<any>>;
 
     constructor(dependencies: ValueNode<any>[]) {
         super(MIN_SEQ);
@@ -382,15 +382,15 @@ abstract class CDependentNode extends CNode {
     }
 
     /** Extracts the nodes that can trigger changes. */
-    private extractTriggers(dependencies: (ValueNode<any> & Partial<DependentNode>)[]): Record<NodeId, SignalNode<any>> {
-        const triggers = {} as Record<NodeId, SignalNode<any>>;
+    private extractTriggers(dependencies: ValueNode<any>[]): Record<NodeId, CSignalNode<any>> {
+        const triggers = {} as Record<NodeId, CSignalNode<any>>;
 
         for (let i = 0; i < dependencies.length; i++) {
             const x = dependencies[i];
-            if (x.triggers) {
+            if (x instanceof CDependentNode) {
                 Object.assign(triggers, x.triggers, triggers);
-            } else {
-                triggers[x.id] = x as SignalNode<any>;
+            } else if (x instanceof CSignalNode) {
+                triggers[x.id] = x
             }
         }
         return triggers;
@@ -401,7 +401,7 @@ class CSignalNode<T> extends CNode {
     /** The current value of the given type */
     value: T;
     /** Reverse of triggers */
-    dependents: WeakRef<DependentNode>[];
+    dependents: WeakRef<CDependentNode>[];
 
     constructor(value: T) {
         super(nextN());
@@ -410,8 +410,8 @@ class CSignalNode<T> extends CNode {
     }
 
     /** Wrap node in a writable facade */
-    asWritable(): WritableSignal<T> & Meta<SignalNode<T>> {
-        const f = this.sgetValue.bind(this) as WritableSignal<T> & Meta<SignalNode<T>>;
+    asWritable(): WritableSignal<T> & Meta<CSignalNode<T>> {
+        const f = this.sgetValue.bind(this) as WritableSignal<T> & Meta<CSignalNode<T>>;
         Object.defineProperty(f, "id", { value: this.id, writable: false });
         Object.defineProperty(f, "_self", { value: this, writable: false });
         Object.defineProperty(f, "write", { value: true, writable: false });
@@ -420,7 +420,7 @@ class CSignalNode<T> extends CNode {
 
     /** Wrap node in a readable facade */
     asReadable(): ReadableSignal<T> & Meta<ValueNode<T>> {
-        const f = this.getValue.bind(this) as ReadableSignal<T> & Meta<SignalNode<T>>;
+        const f = this.getValue.bind(this) as ReadableSignal<T> & Meta<CSignalNode<T>>;
         Object.defineProperty(f, "id", { value: this.id, writable: false });
         Object.defineProperty(f, "_self", { value: this, writable: false });
         return f;
@@ -472,8 +472,8 @@ class CDerivedNode<T> extends CDependentNode {
         this.calculation = calculation;
     }
     /** Wrap node in a derived facade */
-    asDerived(): DerivedSignal<T> & Meta<DerivedNode<T>> {
-        let f = this.calcDerivedNode.bind(this) as DerivedSignal<T> & Meta<DerivedNode<T>>;
+    asDerived(): DerivedSignal<T> & Meta<CDerivedNode<T>> {
+        let f = this.calcDerivedNode.bind(this) as DerivedSignal<T> & Meta<CDerivedNode<T>>;
         Object.defineProperty(f, "id", { value: this.id, writable: false });
         Object.defineProperty(f, "_self", { value: this, writable: false });
         return f;
@@ -534,8 +534,8 @@ class CEffectNode extends CDependentNode {
     }
 
     /** Wrap node in an effect facade */
-    asEffect(): Effect & Meta<EffectNode> {
-        let f = this.actEffectNode.bind(this) as Effect & Meta<EffectNode>;
+    asEffect(): Effect & Meta<CEffectNode> {
+        let f = this.actEffectNode.bind(this) as Effect & Meta<CEffectNode>;
         Object.defineProperty(f, "id", { value: this.id, writable: false });
         Object.defineProperty(f, "_self", { value: this, writable: false });
         Object.defineProperty(f, "act", { value: true, writable: false });
@@ -576,48 +576,7 @@ class CEffectNode extends CDependentNode {
     }
 }
 
-type Node = {
-    /** Unique node id used for matching and lookup */
-    id: NodeId,
-    /** 
-     * The sequence number representing the current value or effect.
-     * For dependent nodes this is the maximum of all its node dependencies
-     * when it was last calculated. 
-    */
-    current: SequenceNumber,
-};
-
-type DependentNode = Node & {
-    /** The sequence number when it was last checked against dependencies. */
-    checked: SequenceNumber,
-    /** The value dependencies this node directly depends on. */
-    dependencies: ValueNode<any>[],
-    /** 
-     * The writable dependencies that will trigger reevaluation.
-     * Derived calculations are filtered out.
-     */
-    triggers: Record<NodeId, SignalNode<any>>
-};
-
-type ValueNode<T> = Node & {
-    /** The current value of the given type */
-    value?: T,
-};
-
-type SignalNode<T> = ValueNode<T> & {
-    /** Reverse of triggers */
-    dependents: WeakRef<DependentNode>[]
-}
-
-type DerivedNode<T> = ValueNode<T> & DependentNode & {
-    /** The calculation function to execute when dependencies change */
-    calculation: Calculation<T>
-};
-
-type EffectNode = DependentNode & {
-    /** The action function to execute when dependencies change */
-    action: Action
-};
+type ValueNode<T> = CSignalNode<T>  | CDerivedNode<T>;
 
 /** Calculation signature */
 type Calculation<T> = (args: any[]) => T;
