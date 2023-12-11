@@ -242,12 +242,8 @@ export function propup(o: any, p: any, s: any): any {
 
 /** Drops an effect or derived from execution handling. */
 export function drop(effectOrDerived: Effect | DerivedSignal<any>) {
-    //TODO drop by setting flag instead
     const m = meta<DependentNode>(effectOrDerived);
-    Object.values(m._self.triggers).forEach(x => {
-        const i = x.dependents.findIndex(y => y.deref() === m._self);
-        if (i >= 0) delete x.dependents[i];
-    });
+    m._self.drop();
 }
 
 /**
@@ -373,6 +369,7 @@ abstract class DependentNode extends Node {
      * Derived calculations are filtered out.
      */
     readonly triggers: Record<NodeId, SignalNode<any>>;
+    private _dropped: boolean = false;
 
     constructor(dependencies: ValueNode<any>[]) {
         super(MIN_SEQ);
@@ -381,6 +378,16 @@ abstract class DependentNode extends Node {
 
         this.triggers = this.extractTriggers(dependencies);
         Object.values(this.triggers).forEach(x => x.dependents.push(new WeakRef(this)));
+    }
+
+    /** True if the node is dropped from execution. */
+    get dropped() {
+        return this._dropped;
+    }
+
+    /** Drops the node from further execution. */
+    drop() {
+        this._dropped = true;
     }
 
     /** Extracts the nodes that can trigger changes. */
@@ -448,7 +455,7 @@ class SignalNode<T> extends Node {
         const deriveds = [] as DerivedSignal<any>[];
         const effects = [] as Effect[];
         deref(this.dependents, (d) => {
-            if (noop) return;
+            if (noop || d.dropped) return;
             if (d instanceof DerivedNode) {
                 deriveds.push(d.asDerived())
             }
@@ -510,7 +517,7 @@ class DerivedNode<T> extends DependentNode {
      * Returns the latest value.
     */
     _calc(check: SequenceNumber): T {
-        if (check > this.checked) {
+        if (!this.dropped && check > this.checked) {
             const max = Object.values(this.triggers).reduce((x, c) => x.current > c.current ? x : c).current;
             if (max > this.checked) {
                 // Changes has occured in the dependencies.
@@ -562,7 +569,7 @@ class EffectNode extends DependentNode {
 
     /** Performs the dependency checks and executes the action if it is outdated */
     private _act(check: SequenceNumber): void {
-        if (check > this.checked) {
+        if (!this.dropped && check > this.checked) {
             const max = Object.values(this.triggers).reduce((x, c) => x.current > c.current ? x : c).current;
             if (max > this.checked) {
                 // Changes has occured in the dependencies.
