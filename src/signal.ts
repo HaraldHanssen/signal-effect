@@ -215,7 +215,7 @@ export function propup(o: any, p: any, s: any): any {
     const m = meta(s);
     if (m._self instanceof EffectNode) throw new SignalError("Expected a writable, readable, or derived signal.");
     if (!(m._self instanceof Node)) throw new SignalError("Not a signal primitive.")
-    return Object.defineProperty(o ?? {}, p, m.write == true ? { get: s, set: s } : { get: s });
+    return def(o ?? {}, p, m.write == true ? { get: s, set: s } : { get: s });
 }
 
 /** Drops an effect or derived from execution handling. */
@@ -224,12 +224,11 @@ export function drop(effectOrDerived: Effect | DerivedSignal<any>) {
 }
 
 /** Uses {@link ManualExecution} to run the provided signals/effects. Only those affected by changed signals are run. */
-export function update(items: DerivedSignal<any>[] | Effect[]):void;
+export function update(items: DerivedSignal<any>[] | Effect[]): void;
 /** Uses {@link DelayedExecution} to run the provided signals/effects. Only those affected by changed signals are run. */
 export function update(): [DerivedSignal<any>[], Effect[]];
 /** Invokes the update method on the provided {@link execution.handler} */
-export function update(...args: any[]):any
-{
+export function update(...args: any[]): any {
     const handler = execution.handler;
     if (handler === ManualExecution) {
         ManualExecution.update(args[0]);
@@ -283,20 +282,25 @@ function nextN(): SequenceNumber {
 export function currN(): SequenceNumber {
     return seqN;
 }
+
+// Shorthands
+const def = Object.defineProperty;
+const vals = Object.values;
+
 //#endregion
 
 //#region Execution Handlers
 function createManualExecutionHandler(): ManualExecutionHandler {
     function update(items: DerivedSignal<any>[] | Effect[]) {
         type UpdateNode = Meta<DependentNode> & (() => unknown);
-    
+
         // Precheck the items before they are executed 
         const current = currN();
         (items as UpdateNode[])
             .filter(x => {
                 const self = x._self;
                 if (current > self.checked) {
-                    if (Object.values(self.triggers).some(y => y.current > self.checked)) {
+                    if (vals(self.triggers).some(y => y.current > self.checked)) {
                         return true;
                     }
                     self.checked = current;
@@ -305,7 +309,7 @@ function createManualExecutionHandler(): ManualExecutionHandler {
             })
             .forEach(x => x());
     }
-    
+
     return { changed: () => { }, update };
 }
 
@@ -321,12 +325,12 @@ function createDelayedExecutionHandler(): DelayedExecutionHandler {
     let d: Record<NodeId, DerivedSignal<any>> = {};
     let e: Record<NodeId, Effect> = {};
     function changed(_: ReadableSignal<any> | undefined, deriveds: DerivedSignal<any>[] | undefined, effects: Effect[] | undefined) {
-        if (deriveds) deriveds.forEach(x => d[x.id] = x);
-        if (effects) effects.forEach(x => e[x.id] = x);
+        deriveds?.forEach(x => d[x.id] = x);
+        effects?.forEach(x => e[x.id] = x);
     }
     function update(): [DerivedSignal<any>[], Effect[]] {
-        const deriveds = Object.values(d);
-        const effects = Object.values(e);
+        const deriveds = vals(d);
+        const effects = vals(e);
         deriveds.forEach(x => x());
         effects.forEach(x => x());
         d = {};
@@ -338,15 +342,14 @@ function createDelayedExecutionHandler(): DelayedExecutionHandler {
 //#endregion
 
 //#region Nodes and Dependencies
+/**
+ * Base node for all.
+ * @prop {} id Unique node id used for matching and lookup
+ * @prop {} current The sequence number representing the current value or effect. 
+ */
 abstract class Node {
-    /** Unique node id used for matching and lookup */
-    id: number;
-    /** 
-     * The sequence number representing the current value or effect.
-     * For dependent nodes this is the maximum of all its node dependencies
-     * when it was last calculated. 
-    */
-    current: bigint;
+    id: NodeId;
+    current: SequenceNumber;
 
     constructor(current: SequenceNumber) {
         this.id = nextId();
@@ -354,91 +357,91 @@ abstract class Node {
     }
 }
 
+/**
+ * Base node for those that depend on others.
+ * For dependent nodes the {@link Node.current} value is the maximum of all its node dependencies when it was last calculated. 
+ * @prop {} checked The sequence number when it was last checked against dependencies.
+ * @prop {} dependencies The value dependencies this node directly depends on.
+ * @prop {} triggers The writable dependencies that will trigger reevaluation. Derived calculations are filtered out.
+ * @prop {} dropped True if the node is dropped from execution.
+ * @method drop Drops the node from further execution.
+ */
 abstract class DependentNode extends Node {
-    /** The sequence number when it was last checked against dependencies. */
     checked: SequenceNumber;
-    /** The value dependencies this node directly depends on. */
-    readonly dependencies: ValueNode<any>[];
-    /** 
-     * The writable dependencies that will trigger reevaluation.
-     * Derived calculations are filtered out.
-     */
+    readonly deps: ValueNode<any>[];
     readonly triggers: Record<NodeId, SignalNode<any>>;
     private _dropped: boolean = false;
 
-    constructor(dependencies: ValueNode<any>[]) {
+    constructor(deps: ValueNode<any>[]) {
         super(MIN_SEQ);
         this.checked = MIN_SEQ;
-        this.dependencies = dependencies;
-
-        this.triggers = this.extractTriggers(dependencies);
-        Object.values(this.triggers).forEach(x => x.dependents.push(new WeakRef(this)));
+        this.deps = deps;
+        this.triggers = this.getTriggers();
+        vals(this.triggers).forEach(x => x.trigs.push(new WeakRef(this)));
     }
 
-    /** True if the node is dropped from execution. */
     get dropped() {
         return this._dropped;
     }
 
-    /** Drops the node from further execution. */
     drop() {
         this._dropped = true;
     }
 
-    /** Extracts the nodes that can trigger changes. */
-    private extractTriggers(dependencies: ValueNode<any>[]): Record<NodeId, SignalNode<any>> {
-        const triggers = {} as Record<NodeId, SignalNode<any>>;
+    private getTriggers(): Record<NodeId, SignalNode<any>> {
+        const t = {} as Record<NodeId, SignalNode<any>>;
 
-        for (let i = 0; i < dependencies.length; i++) {
-            const x = dependencies[i];
+        for (let i = 0; i < this.deps.length; i++) {
+            const x = this.deps[i];
             if (x instanceof DependentNode) {
-                Object.assign(triggers, x.triggers, triggers);
+                Object.assign(t, x.triggers, t);
             } else if (x instanceof SignalNode) {
-                triggers[x.id] = x
+                t[x.id] = x
             }
         }
-        return triggers;
+        return t;
     }
 }
 
+/**
+ * The node for writable signals.
+ * @prop {} value The current value of the given type.
+ * @prop {} dependents Reverse of triggers
+ * @method asWritable Wrap node in a writable facade.
+ * @method asReadable Wrap node in a readable facade
+ */
 class SignalNode<T> extends Node {
-    /** The current value of the given type */
     private value: T;
-    /** Reverse of triggers */
-    readonly dependents: WeakRef<DependentNode>[];
+    readonly trigs: WeakRef<DependentNode>[];
 
     constructor(value: T) {
         super(nextN());
         this.value = value;
-        this.dependents = [];
+        this.trigs = [];
     }
 
-    /** Wrap node in a writable facade */
     asWritable(): WritableSignal<T> & Meta<SignalNode<T>> {
-        const f = this.sgetValue.bind(this) as WritableSignal<T> & Meta<SignalNode<T>>;
-        Object.defineProperty(f, "id", { value: this.id, writable: false });
-        Object.defineProperty(f, "_self", { value: this, writable: false });
-        Object.defineProperty(f, "write", { value: true, writable: false });
+        const f = this.sget.bind(this) as WritableSignal<T> & Meta<SignalNode<T>>;
+        def(f, "id", { value: this.id, writable: false });
+        def(f, "_self", { value: this, writable: false });
+        def(f, "write", { value: true, writable: false });
         return f;
     }
 
-    /** Wrap node in a readable facade */
     asReadable(): ReadableSignal<T> & Meta<ValueNode<T>> {
-        const f = this.getValue.bind(this) as ReadableSignal<T> & Meta<SignalNode<T>>;
-        Object.defineProperty(f, "id", { value: this.id, writable: false });
-        Object.defineProperty(f, "_self", { value: this, writable: false });
+        const f = this.get.bind(this) as ReadableSignal<T> & Meta<SignalNode<T>>;
+        def(f, "id", { value: this.id, writable: false });
+        def(f, "_self", { value: this, writable: false });
         return f;
     }
 
-    /** Get value from a readonly value node. */
-    private getValue(value?: T): T {
+    private get(value?: T): T {
         if (value) throw TypeError("Cannot modify a readonly signal");
         if (denyReentry && !allowReentryReadWrite) throw new ReentryError(ERR_REENTRY_READ);
         return this.value;
     }
 
-    /** Get or set value on a writable value node. */
-    private sgetValue(value?: T): T | void {
+    private sget(value?: T): T | void {
         if (denyReentry && !allowReentryReadWrite) throw new ReentryError(value == undefined ? ERR_REENTRY_READ : ERR_REENTRY_WRITE);
         if (value == undefined) return this.value;
         if (Object.is(this.value, value)) return;
@@ -449,7 +452,7 @@ class SignalNode<T> extends Node {
         const manual = execution.handler === ManualExecution;
         const deriveds = [] as DerivedSignal<any>[];
         const effects = [] as Effect[];
-        deref(this.dependents, (d) => {
+        deref(this.trigs, (d) => {
             if (manual || d.dropped) return;
             if (d instanceof DerivedNode) {
                 deriveds.push(d.asDerived())
@@ -468,26 +471,28 @@ class SignalNode<T> extends Node {
     }
 }
 
+/**
+ * The node for derived signals.    
+ * @prop {} value The current value of the given type
+ * @method asDerived Wrap node in a derived facade. May be called manually via or via an execution handler.
+ */
 class DerivedNode<T> extends DependentNode {
-    /** The current value of the given type */
     private value?: T;
-    /** The calculation function to execute when dependencies change */
-    private calculation: Calculation<T>;
+    private cb: Calculation<T>;
 
     constructor(dependencies: ValueNode<any>[], calculation: Calculation<T>) {
         super(dependencies);
         this.value = undefined;
-        this.calculation = calculation;
+        this.cb = calculation;
     }
-    /** Wrap node in a derived facade */
+
     asDerived(): DerivedSignal<T> & Meta<DerivedNode<T>> {
         let f = this.calc.bind(this) as DerivedSignal<T> & Meta<DerivedNode<T>>;
-        Object.defineProperty(f, "id", { value: this.id, writable: false });
-        Object.defineProperty(f, "_self", { value: this, writable: false });
+        def(f, "id", { value: this.id, writable: false });
+        def(f, "_self", { value: this, writable: false });
         return f;
     }
 
-    /** Calculates the derived value. May be called manually or via an execution handler */
     private calc(value?: T): T {
         if (value) throw TypeError("Cannot modify a derived signal");
         if (denyReentry && !allowReentryReadWrite) throw new ReentryError(ERR_REENTRY_READ);
@@ -507,19 +512,14 @@ class DerivedNode<T> extends DependentNode {
         }
     }
 
-    /**
-     * Performs the dependency checks and calculates if it is outdated.
-     * Returns the latest value.
-    */
     _calc(check: SequenceNumber): T {
         if (!this.dropped && check > this.checked) {
-            const max = Object.values(this.triggers).reduce((x, c) => x.current > c.current ? x : c).current;
+            const max = vals(this.triggers).reduce((x, c) => x.current > c.current ? x : c).current;
             if (max > this.checked) {
                 // Changes has occured in the dependencies.
-                const values = this.dependencies.map((x) => x instanceof DerivedNode ? x._calc(check) : x._get());
+                const values = this.deps.map((x) => x instanceof DerivedNode ? x._calc(check) : x._get());
 
-                // Dependencies have changed or this is a new node. Recalculate.
-                this.value = this.calculation(values);
+                this.value = this.cb(values);
                 this.current = max;
             }
 
@@ -531,24 +531,25 @@ class DerivedNode<T> extends DependentNode {
     }
 }
 
+/**
+ * The node for effect actions.
+ * @method asEffect Wrap node in an effect facade. May be called manually via or via an execution handler.
+ */
 class EffectNode extends DependentNode {
-    /** The user provided action function to execute when dependencies change. */
-    private action: Action;
+    private cb: Action;
 
     constructor(dependencies: ValueNode<any>[], action: Action) {
         super(dependencies);
-        this.action = action;
+        this.cb = action;
     }
 
-    /** Wrap node in an effect facade */
     asEffect(): Effect & Meta<EffectNode> {
         let f = this.act.bind(this) as Effect & Meta<EffectNode>;
-        Object.defineProperty(f, "id", { value: this.id, writable: false });
-        Object.defineProperty(f, "_self", { value: this, writable: false });
+        def(f, "id", { value: this.id, writable: false });
+        def(f, "_self", { value: this, writable: false });
         return f;
     }
 
-    /** Act on the effect. May be called manually or via an execution handler */
     private act(): void {
         if (denyReentry) throw new ReentryError(ERR_REENTRY_READ);
         try {
@@ -562,16 +563,14 @@ class EffectNode extends DependentNode {
         }
     }
 
-    /** Performs the dependency checks and executes the action if it is outdated */
     private _act(check: SequenceNumber): void {
         if (!this.dropped && check > this.checked) {
-            const max = Object.values(this.triggers).reduce((x, c) => x.current > c.current ? x : c).current;
+            const max = vals(this.triggers).reduce((x, c) => x.current > c.current ? x : c).current;
             if (max > this.checked) {
                 // Changes has occured in the dependencies.
-                const values = this.dependencies.map((x) => x instanceof DerivedNode ? x._calc(check) : x._get());
+                const values = this.deps.map((x) => x instanceof DerivedNode ? x._calc(check) : x._get());
 
-                // Dependencies have changed or this is a new node. React.
-                this.action(values);
+                this.cb(values);
                 this.current = max;
             }
 
@@ -590,13 +589,15 @@ type Calculation<T> = (args: any[]) => T;
 /** Action signature */
 type Action = (args: any[]) => void;
 
-/** Function metadata */
+/** 
+ * Function metadata.
+ * @prop {} id The identifier of the node
+ * @prop {} _self The reference field that is added to the function facades. Same as 'this' inside the methods.
+ * @prop {} write True if the provided function can be used as a setter
+*/
 type Meta<F> = {
-    /** The identifier of the node */
     id: NodeId,
-    /** The reference field that is added to the function facades. Same as 'this' inside the methods. */
     _self: F,
-    /** True if the provided function can be used as a setter */
     write?: boolean
 };
 
@@ -635,7 +636,7 @@ function meta<F>(signal: any): Meta<F> {
 }
 //#endregion
 
-/** For testing purposes */
+/** @ignore For testing purposes */
 export const _private = {
     deref
 }
