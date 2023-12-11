@@ -90,7 +90,25 @@ export interface Effect {
     readonly id: NodeId
 }
 
-// Convenience definitions to simplify function signatures using several signals as parameters
+/**
+ * The interface for handling execution.
+ * By default the {@link NoopExecution} is active, it requires manual {@link update}. Switch to a more appropriate
+ * execution handler for your scenario.
+ **/
+export interface ExecutionHandler {
+    /** 
+     * Called each time a writable signal has changed, or when a derived or effect is added.
+    */
+    changed(changed: ReadableSignal<any> | undefined, deriveds: DerivedSignal<any>[] | undefined, effects: Effect[] | undefined): void;
+}
+
+/** The delayed execution handler stores the affected deriveds and effects and executes them when {@link update} is called. */
+export interface DelayedExecutionHandler extends ExecutionHandler {
+    /** Updates all affected deriveds and effects since last call. Returns them afterwards. */
+    update(): [DerivedSignal<any>[], Effect[]];
+}
+
+//#region Convenience definitions to simplify function signatures using several signals as parameters
 type WritableSignalInitTypes = [any, ...Array<any>] | Array<any>;
 type WritableSignalInitValues<T> = { [K in keyof T]: T[K] extends infer U ? WritableSignal<U> : never };
 
@@ -101,7 +119,7 @@ type ReadableSignalValues<T> = { [K in keyof T]: T[K] extends ReadableSignal<inf
 
 type ReadonlyProperty<P extends PropertyKey, T> = { readonly [K in P]: T };
 type WritableProperty<P extends PropertyKey, T> = { [K in P]: T };
-
+//#endregion
 
 /** Create a single writable signal with the provided initial value. */
 export function signal<T>(initial: T): WritableSignal<T> {
@@ -234,55 +252,6 @@ export function update(items: DerivedSignal<any>[] | Effect[]) {
         .forEach(x => x());
 }
 
-/**
- * The interface for handling execution.
- * By default the {@link NoopExecution} is active, it requires manual {@link update}. Switch to a more appropriate
- * execution handler for your scenario.
- **/
-export interface ExecutionHandler {
-    /** 
-     * Called each time a writable signal has changed, or when a derived or effect is added.
-    */
-    changed(changed: ReadableSignal<any> | undefined, deriveds: DerivedSignal<any>[] | undefined, effects: Effect[] | undefined): void;
-}
-
-/** The delayed execution handler stores the affected deriveds and effects and executes them when {@link update} is called. */
-export interface DelayedExecutionHandler extends ExecutionHandler {
-    /** Updates all affected deriveds and effects since last call. Returns them afterwards. */
-    update(): [DerivedSignal<any>[], Effect[]];
-}
-
-function createNoopExecutionHandler(): ExecutionHandler {
-    return { changed: () => { } };
-}
-
-function createImmediateExecutionHandler(): ExecutionHandler {
-    function changed(_: ReadableSignal<any> | undefined, deriveds: DerivedSignal<any>[] | undefined, effects: Effect[] | undefined) {
-        deriveds?.forEach(x => x());
-        effects?.forEach(x => x());
-    }
-    return { changed };
-}
-
-function createDelayedExecutionHandler(): DelayedExecutionHandler {
-    let d: Record<NodeId, DerivedSignal<any>> = {};
-    let e: Record<NodeId, Effect> = {};
-    function changed(_: ReadableSignal<any> | undefined, deriveds: DerivedSignal<any>[] | undefined, effects: Effect[] | undefined) {
-        if (deriveds) deriveds.forEach(x => d[x.id] = x);
-        if (effects) effects.forEach(x => e[x.id] = x);
-    }
-    function update(): [DerivedSignal<any>[], Effect[]] {
-        const deriveds = Object.values(d);
-        const effects = Object.values(e);
-        deriveds.forEach(x => x());
-        effects.forEach(x => x());
-        d = {};
-        e = {};
-        return [deriveds, effects];
-    }
-    return { changed, update };
-}
-
 /** The default execution handler. Does nothing. All deriveds and effects must either be called directly or through the {@link update} method. */
 export const NoopExecution = createNoopExecutionHandler();
 /** Optional execution handler. Calls derived and effects immediately upon change. */
@@ -314,7 +283,9 @@ export class ReentryError extends SignalError {
     }
 }
 
-// Internals
+//#region Internals
+
+//#region Flags and Counters
 // Call tracking
 let denyReentry = false;
 let allowReentryReadWrite = false;
@@ -340,9 +311,42 @@ function nextN(): SequenceNumber {
 export function currN(): SequenceNumber {
     return seqN;
 }
+//#endregion
 
-// Nodes and Dependencies
+//#region Execution Handlers
+function createNoopExecutionHandler(): ExecutionHandler {
+    return { changed: () => { } };
+}
 
+function createImmediateExecutionHandler(): ExecutionHandler {
+    function changed(_: ReadableSignal<any> | undefined, deriveds: DerivedSignal<any>[] | undefined, effects: Effect[] | undefined) {
+        deriveds?.forEach(x => x());
+        effects?.forEach(x => x());
+    }
+    return { changed };
+}
+
+function createDelayedExecutionHandler(): DelayedExecutionHandler {
+    let d: Record<NodeId, DerivedSignal<any>> = {};
+    let e: Record<NodeId, Effect> = {};
+    function changed(_: ReadableSignal<any> | undefined, deriveds: DerivedSignal<any>[] | undefined, effects: Effect[] | undefined) {
+        if (deriveds) deriveds.forEach(x => d[x.id] = x);
+        if (effects) effects.forEach(x => e[x.id] = x);
+    }
+    function update(): [DerivedSignal<any>[], Effect[]] {
+        const deriveds = Object.values(d);
+        const effects = Object.values(e);
+        deriveds.forEach(x => x());
+        effects.forEach(x => x());
+        d = {};
+        e = {};
+        return [deriveds, effects];
+    }
+    return { changed, update };
+}
+//#endregion
+
+//#region Nodes and Dependencies
 abstract class Node {
     /** Unique node id used for matching and lookup */
     id: number;
@@ -627,8 +631,11 @@ function vnode<T>(signal: ReadableSignal<T>): ValueNode<T> {
 function meta<F>(signal: any): Meta<F> {
     return signal as Meta<F>;
 }
+//#endregion
 
 /** For testing purposes */
 export const _private = {
     deref
 }
+
+//#endregion
