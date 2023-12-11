@@ -108,6 +108,27 @@ export interface DelayedExecutionHandler extends ExecutionHandler {
     update(): [DerivedSignal<any>[], Effect[]];
 }
 
+/**
+ * Base class for all signal related errors.
+ */
+export class SignalError extends Error {
+    constructor(message: string) {
+        super(message);
+        Object.setPrototypeOf(this, SignalError.prototype);
+    }
+}
+
+/**
+ * Thrown if user is trying to reenter a get or set method of a signal within an effect or derived function.
+ * All dependent values must be provided upon declaration.
+ */
+export class ReentryError extends SignalError {
+    constructor(message: string) {
+        super(message);
+        Object.setPrototypeOf(this, ReentryError.prototype);
+    }
+}
+
 //#region Convenience definitions to simplify function signatures using several signals as parameters
 type WritableSignalInitTypes = [any, ...Array<any>] | Array<any>;
 type WritableSignalInitValues<T> = { [K in keyof T]: T[K] extends infer U ? WritableSignal<U> : never };
@@ -261,27 +282,6 @@ export const DelayedExecution = createDelayedExecutionHandler();
 
 /** The execution handler determines how the execution is performed. */
 export const execution = { handler: NoopExecution };
-
-/**
- * Base class for all signal related errors.
- */
-export class SignalError extends Error {
-    constructor(message: string) {
-        super(message);
-        Object.setPrototypeOf(this, SignalError.prototype);
-    }
-}
-
-/**
- * Thrown if user is trying to reenter a get or set method of a signal within an effect or derived function.
- * All dependent values must be provided upon declaration.
- */
-export class ReentryError extends SignalError {
-    constructor(message: string) {
-        super(message);
-        Object.setPrototypeOf(this, ReentryError.prototype);
-    }
-}
 
 //#region Internals
 
