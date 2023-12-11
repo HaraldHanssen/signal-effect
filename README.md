@@ -36,17 +36,13 @@ Reactive signal library without any dependencies.
     
     Remember though, dependency references in ```derived``` and ```effect``` still apply. The top nodes need to be unreferenced for the underlying structure to be collected.
     
-    GC is unpredictable. With execution strategies other than the default **Noop**, it is necessary to _drop_ the primitives first to prevent unintended execution.
-
-- **Bulk Update**
-
-    Runs through the provided ```derived``` and ```effect``` primitives and reexecutes their corresponding calculations and actions if they are outdated by their dependencies. Only relevant with the **Noop** strategy (see below).
+    GC is unpredictable. With execution strategies other than the default **Manual**, it is necessary to _drop_ the primitives first to prevent unintended execution.
 
 
 ## And different execution strategies (handlers):
-- **Noop**
+- **Manual**
 
-    (default) Will not execute ```derived```s and ```effect```s, user must manually invoke the provided bulk update method or call them directly.
+    (default) Will not execute ```derived```s and ```effect```s when ```signal```s change, user must manually invoke the provided update method or call them directly.
 
 - **Immediate**
 
@@ -157,7 +153,7 @@ Test based on [cellx](https://github.com/Riim/cellx#benchmark) benchmark.
 Average of 10 iterations. Results in milliseconds.
 | handler\layers        | 10        | 100       | 500       | 1000      | 5000      |
 | ---------- | ---------:| ---------:| ---------:| ---------:| ---------:|
-| noop       |      0.04 |      0.50 |      1.03 |      2.09 |     12.09 |
+| manual     |      0.04 |      0.50 |      1.03 |      2.09 |     12.09 |
 | immediate  |      0.08 |      0.71 |      3.98 |      7.98 |     41.52 |
 | delayed    |      0.07 |      0.66 |      3.61 |      7.74 |     41.35 |
 Node v20.10.0 on Mac Air M1

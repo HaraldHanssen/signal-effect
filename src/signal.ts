@@ -54,31 +54,23 @@ export interface WritableSignal<T> extends ReadableSignal<T> {
 
 /**
  * A derived signal performs a calculation if one or more sources have changed.
- * Either run an array of derived signals in bulk using the {@link update} function,
- * or act on them individually through this interface.
- * 
- * No derived signals are run by the library on its own. It is the responsibility of
- * the library user to keep track of all deriveds and schedule them (e.g. on an
- * asynchronous task) to run at a convenient point of time.
+ * Derived signals are run by the provided {@link ExecutionHandler}.
  * 
  * A derived signal will exist as long as there are other derived signals or effects
  * depending on it. To delete a derived signal, all those depending on it must be
- * removed as well.
+ * removed as well. {@link drop} the signal to make sure it never recalculates
+ * regardless of chosen execution handler.
 */
 export interface DerivedSignal<T> extends ReadableSignal<T> {
 }
 
 /**
  * An effect performs an action if one or more sources have changed.
- * Either run an array of effects in bulk using the {@link update} function,
- * or act on them individually through this interface.
- * 
- * No effects are run by the library on its own. It is the responsibility of
- * the library user to keep track of all effects and schedule them (e.g. on an
- * asynchronous task) to run at a convenient point of time.
+ * Effects are run by the provided {@link ExecutionHandler}.
  * 
  * An effect is a leaf node in the signal system. To delete an effect, remove
- * the reference(s) to it and it will be gc'ed.
+ * the reference(s) to it and it will be gc'ed. {@link drop} the effect to make
+ * sure it never reacts regardless of chosen execution handler.
 */
 export interface Effect {
     /** Effect action invoker. Will trigger the action if dependencies have changed. */
@@ -92,7 +84,7 @@ export interface Effect {
 
 /**
  * The interface for handling execution.
- * By default the {@link NoopExecution} is active, it requires manual {@link update}. Switch to a more appropriate
+ * By default the {@link ManualExecution} is active, it requires manual {@link update}. Switch to a more appropriate
  * execution handler for your scenario.
  **/
 export interface ExecutionHandler {
@@ -106,6 +98,11 @@ export interface ExecutionHandler {
 export interface DelayedExecutionHandler extends ExecutionHandler {
     /** Updates all affected deriveds and effects since last call. Returns them afterwards. */
     update(): [DerivedSignal<any>[], Effect[]];
+}
+
+export interface ManualExecutionHandler extends ExecutionHandler {
+    /** Perform bulk update of the provided signals/effects. Only changed signals are propagated through. */
+    update(items: DerivedSignal<any>[] | Effect[]): void;
 }
 
 /**
@@ -245,38 +242,37 @@ export function drop(effectOrDerived: Effect | DerivedSignal<any>) {
     meta<DependentNode>(effectOrDerived)._self.drop();
 }
 
-/**
- * Perform bulk update of the provided signals/effects. Only changed signals are propagated through.
- * Use this method at a convenient time when the {@link NoopExecution} handler is used.
- */
-export function update(items: DerivedSignal<any>[] | Effect[]) {
-    type UpdateNode = Meta<DependentNode> & (() => unknown);
-
-    // Precheck the items before they are executed 
-    const current = currN();
-    (items as UpdateNode[])
-        .filter(x => {
-            const self = x._self;
-            if (current > self.checked) {
-                if (Object.values(self.triggers).some(y => y.current > self.checked)) {
-                    return true;
-                }
-                self.checked = current;
-            }
-            return false;
-        })
-        .forEach(x => x());
+/** Uses {@link ManualExecution} to run the provided signals/effects. Only those affected by changed signals are run. */
+export function update(items: DerivedSignal<any>[] | Effect[]):void;
+/** Uses {@link DelayedExecution} to run the provided signals/effects. Only those affected by changed signals are run. */
+export function update(): [DerivedSignal<any>[], Effect[]];
+/** Invokes the update method on the provided {@link execution.handler} */
+export function update(...args: any[]):any
+{
+    const handler = execution.handler;
+    if (handler === ManualExecution) {
+        ManualExecution.update(args[0]);
+    }
+    else if (handler === DelayedExecution) {
+        return DelayedExecution.update();
+    }
+    else if ((handler as any).update) {
+        return (handler as any).update(...args);
+    }
+    else {
+        throw new SignalError("No update method on handler.")
+    }
 }
 
-/** The default execution handler. Does nothing. All deriveds and effects must either be called directly or through the {@link update} method. */
-export const NoopExecution = createNoopExecutionHandler();
+/** The default execution handler. All deriveds and effects must either be called directly or through the {@link ManualExecutionHandler.update} method. */
+export const ManualExecution = createManualExecutionHandler();
 /** Optional execution handler. Calls derived and effects immediately upon change. */
 export const ImmediateExecution = createImmediateExecutionHandler();
 /** Optional execution handler. Gathers all deriveds and effects and executes them when the update method is called. */
 export const DelayedExecution = createDelayedExecutionHandler();
 
-/** The execution handler determines how the execution is performed. */
-export const execution = { handler: NoopExecution };
+/** The execution handler determines how the execution is performed. Defaults to {@link ManualExecution} */
+export const execution = { handler: ManualExecution as ExecutionHandler };
 
 //#region Internals
 
@@ -309,8 +305,27 @@ export function currN(): SequenceNumber {
 //#endregion
 
 //#region Execution Handlers
-function createNoopExecutionHandler(): ExecutionHandler {
-    return { changed: () => { } };
+function createManualExecutionHandler(): ManualExecutionHandler {
+    function update(items: DerivedSignal<any>[] | Effect[]) {
+        type UpdateNode = Meta<DependentNode> & (() => unknown);
+    
+        // Precheck the items before they are executed 
+        const current = currN();
+        (items as UpdateNode[])
+            .filter(x => {
+                const self = x._self;
+                if (current > self.checked) {
+                    if (Object.values(self.triggers).some(y => y.current > self.checked)) {
+                        return true;
+                    }
+                    self.checked = current;
+                }
+                return false;
+            })
+            .forEach(x => x());
+    }
+    
+    return { changed: () => { }, update };
 }
 
 function createImmediateExecutionHandler(): ExecutionHandler {
@@ -450,11 +465,11 @@ class SignalNode<T> extends Node {
         this.current = nextN();
 
         // Notify execution handler
-        const noop = execution.handler === NoopExecution;
+        const manual = execution.handler === ManualExecution;
         const deriveds = [] as DerivedSignal<any>[];
         const effects = [] as Effect[];
         deref(this.dependents, (d) => {
-            if (noop || d.dropped) return;
+            if (manual || d.dropped) return;
             if (d instanceof DerivedNode) {
                 deriveds.push(d.asDerived())
             }
@@ -462,7 +477,7 @@ class SignalNode<T> extends Node {
                 effects.push(d.asEffect());
             }
         });
-        if (!noop) {
+        if (!manual) {
             execution.handler.changed(this.asReadable(), deriveds, effects);
         }
     }

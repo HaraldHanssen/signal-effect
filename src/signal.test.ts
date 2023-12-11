@@ -774,7 +774,7 @@ describe("Performance", () => {
     const layers = Object.keys(SOLUTIONS);
 
     layers.forEach(layer => {
-        const name = "noop";
+        const name = "manual";
         perf.result[name] = {};
         const title = `${name} ${layer} layers`;
         test(title, () => {
