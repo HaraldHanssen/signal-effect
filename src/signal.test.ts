@@ -711,10 +711,11 @@ describe("Performance", () => {
         100: [-2, -4, 2, 3],
         500: [-2, 1, -4, -4],
         1000: [-2, -4, 2, 3],
-        2000: [-2, 1, -4, -4],
-        2500: [-2, -4, 2, 3],
+        // 2000: [-2, 1, -4, -4],
+        // 2500: [-2, -4, 2, 3],
+        5000: [-2, 1, -4, -4],
     } as Record<number, number[]>;
-    const ITERS = 1;
+    const ITERS = 2;
 
     function run(layers: number, handler: DelayedExecutionHandler | undefined = undefined): number {
         const start = {
@@ -760,36 +761,74 @@ describe("Performance", () => {
         for (let i = 0; i < ITERS; i++) {
             result += test();
         }
-        return result/ITERS;
+        return result / ITERS;
     }
 
-    Object.keys(SOLUTIONS).forEach(x => {
-        const name = `noop ${("  " + x).slice(-4)} layers`;
-        test(name, () => {
-            const time = average(() => run(Number(x)));
-            console.log(name, time.toFixed(2) + " ms");
+    type Time = number;
+    type Layers = string;
+    type TestRuns = Record<Layers, Time>;
+    type TestResults = Record<string, TestRuns>;
+    type Performance = { iterations: number, result: TestResults };
+
+    const perf: Performance = { iterations: ITERS, result: {} };
+    const layers = Object.keys(SOLUTIONS);
+
+    layers.forEach(layer => {
+        const name = "noop";
+        perf.result[name] = {};
+        const title = `${name} ${layer} layers`;
+        test(title, () => {
+            const time = average(() => run(Number(layer)));
+            perf.result[name][layer] = time;
         });
     });
 
-    Object.keys(SOLUTIONS).forEach(x => {
-        const name = `immediate ${("  " + x).slice(-4)} layers`;
-        test(name, () => {
+    layers.forEach(layer => {
+        const name = "immediate";
+        perf.result[name] = {};
+        const title = `${name} ${layer} layers`;
+        test(title, () => {
             withHandler(ImmediateExecution, () => {
-                const time = average(() => run(Number(x)));
-                console.log(name, time.toFixed(2) + " ms");
+                const time = average(() => run(Number(layer)));
+                perf.result[name][layer] = time;
             });
         });
     });
 
-    Object.keys(SOLUTIONS).forEach(x => {
-        const name = `delayed ${("  " + x).slice(-4)} layers`;
-        test(name, () => {
+    layers.forEach(layer => {
+        const name = "delayed";
+        perf.result[name] = {};
+        const title = `${name} ${layer} layers`;
+        test(title, () => {
             const handler = DelayedExecution;
             withHandler(handler, () => {
-                const time = average(() => run(Number(x), handler));
-                console.log(name, time.toFixed(2) + " ms");
+                const time = average(() => run(Number(layer), handler));
+                perf.result[name][layer] = time;
             });
         });
     });
 
+    test("log result", () => {
+        const col = " ".repeat(10);
+        console.log(`Average of ${perf.iterations} iterations. Results in milliseconds.`);
+        let header = "| " + ("h\\l" + col).slice(0, col.length) + " |";
+        layers.forEach(x => {
+            header += (" " + x + col).slice(0, col.length) + " |";
+        });
+        console.log(header);
+        let sep = "| " + "-".repeat(col.length) + " |";
+        layers.forEach(() => {
+            sep += " " + "-".repeat(col.length - 1) + ":|";
+        });
+        console.log(sep);
+        Object.entries(perf.result).forEach((r) => {
+            const results = layers.map(layer => r[1][layer]);
+            let output = "| " + (r[0] + col).slice(0, col.length) + " |";
+            results.forEach(x => {
+                output += (col + x.toFixed(2)).slice(-col.length) + " |";
+            });
+            console.log(output);
+        });
+        console.log(`Node ${process.version}`)
+    });
 });

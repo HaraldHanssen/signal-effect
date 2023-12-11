@@ -150,9 +150,25 @@ a(20);
 handler.update(); // outputs '42'
 ```
 
+## Performance
+### Layers
+Test based on [cellx](https://github.com/Riim/cellx#benchmark) benchmark.
+
+Average of 10 iterations. Results in milliseconds.
+| handler\layers        | 10        | 100       | 500       | 1000      | 5000      |
+| ---------- | ---------:| ---------:| ---------:| ---------:| ---------:|
+| noop       |      0.04 |      0.50 |      1.03 |      2.09 |     12.09 |
+| immediate  |      0.08 |      0.71 |      3.98 |      7.98 |     41.52 |
+| delayed    |      0.07 |      0.66 |      3.61 |      7.74 |     41.35 |
+Node v20.10.0 on Mac Air M1
+
+
 ## TODOs
-- [x] Explicit removal of effects and deriveds (drop). Useful in Immediate/Delayed execution.
+- [ ] Automatic dependency discovery for deriveds and effects.
+- [ ] Scoped execution handling.
+- [ ] Scoped create and drop. Track creation of primitives and drop them together.
 - [ ] Allow internal modification of objects and arrays without set. Avoids the need to reconstruct the entire object/array.
+- [x] Explicit removal of effects and deriveds (drop). Useful in Immediate/Delayed execution.
 - [x] Custom execution handlers.
 - [x] Support reading (of independent) signals in effect calculations.
 - [x] Support writing to signals from effect calculations
@@ -161,5 +177,5 @@ handler.update(); // outputs '42'
 
 
 ## Disclaimer
-This library was created just for the fun of it. I was curious of the "sudden leap" to a signal system in Svelte and Angular, and wanted to see how such a system could be constructed. This library is tested to the extent of the current 30+ unit tests. It might be useful in some settings or maybe as an inspiration. Try it out if you like.
+This library was created just for the fun of it. I was curious of the "sudden leap" to a signal system in Svelte and Angular, and wanted to see how such a system could be constructed. This library is tested to the extent of the current unit tests. It might be useful in some settings or maybe as an inspiration. Try it out if you like.
 
