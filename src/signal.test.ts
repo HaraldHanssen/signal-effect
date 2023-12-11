@@ -708,14 +708,15 @@ describe("Performance", () => {
     // From https://github.com/maverick-js/signals/blob/main/bench/layers.js
     const SOLUTIONS = {
         10: [2, 4, -2, -3],
-        100: [-2, -4, 2, 3], 
+        100: [-2, -4, 2, 3],
         500: [-2, 1, -4, -4],
         1000: [-2, -4, 2, 3],
         2000: [-2, 1, -4, -4],
         2500: [-2, -4, 2, 3],
     } as Record<number, number[]>;
+    const ITERS = 1;
 
-    function run(name: string, layers: number, handler:DelayedExecutionHandler|undefined = undefined):void {
+    function run(layers: number, handler: DelayedExecutionHandler | undefined = undefined): number {
         const start = {
             a: signal(1),
             b: signal(2),
@@ -723,7 +724,7 @@ describe("Performance", () => {
             d: signal(4),
         };
 
-        let layer = start as { 
+        let layer = start as {
             a: ReadableSignal<number>,
             b: ReadableSignal<number>,
             c: ReadableSignal<number>,
@@ -749,31 +750,46 @@ describe("Performance", () => {
         const end = layer;
         const solution = [end.a(), end.b(), end.c(), end.d()];
         const endTime = performance.now() - startTime;
-        console.log(name, endTime.toFixed(2) + " ms");
 
         expect(SOLUTIONS[layers]).toEqual(solution);
+        return endTime;
+    }
+
+    function average(test: () => number): number {
+        let result = 0;
+        for (let i = 0; i < ITERS; i++) {
+            result += test();
+        }
+        return result/ITERS;
     }
 
     Object.keys(SOLUTIONS).forEach(x => {
         const name = `noop ${("  " + x).slice(-4)} layers`;
         test(name, () => {
-            run(name, Number(x));
-        });    
+            const time = average(() => run(Number(x)));
+            console.log(name, time.toFixed(2) + " ms");
+        });
     });
 
     Object.keys(SOLUTIONS).forEach(x => {
         const name = `immediate ${("  " + x).slice(-4)} layers`;
         test(name, () => {
-            withHandler(ImmediateExecution, () => run(name, Number(x)));
-        });    
+            withHandler(ImmediateExecution, () => {
+                const time = average(() => run(Number(x)));
+                console.log(name, time.toFixed(2) + " ms");
+            });
+        });
     });
 
     Object.keys(SOLUTIONS).forEach(x => {
         const name = `delayed ${("  " + x).slice(-4)} layers`;
         test(name, () => {
             const handler = DelayedExecution;
-            withHandler(handler, () => run(name, Number(x), handler));
-        });    
+            withHandler(handler, () => {
+                const time = average(() => run(Number(x), handler));
+                console.log(name, time.toFixed(2) + " ms");
+            });
+        });
     });
 
 });

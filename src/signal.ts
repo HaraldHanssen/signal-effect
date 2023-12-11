@@ -242,8 +242,7 @@ export function propup(o: any, p: any, s: any): any {
 
 /** Drops an effect or derived from execution handling. */
 export function drop(effectOrDerived: Effect | DerivedSignal<any>) {
-    const m = meta<DependentNode>(effectOrDerived);
-    m._self.drop();
+    meta<DependentNode>(effectOrDerived)._self.drop();
 }
 
 /**
