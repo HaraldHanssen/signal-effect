@@ -88,8 +88,6 @@ export interface Effect {
      * the id is.
     */
     readonly id: NodeId
-    /** Metadata */
-    readonly act: true
 }
 
 // Convenience definitions to simplify function signatures using several signals as parameters
@@ -107,7 +105,7 @@ type WritableProperty<P extends PropertyKey, T> = { [K in P]: T };
 
 /** Create a single writable signal with the provided initial value. */
 export function signal<T>(initial: T): WritableSignal<T> {
-    return new CSignalNode<T>(initial).asWritable();
+    return new SignalNode<T>(initial).asWritable();
 }
 
 /** Create an array of writable signals with the provided initial value. */
@@ -117,8 +115,8 @@ export function signals<P extends WritableSignalInitTypes>(...initials: P): Writ
 
 /** Create a read only signal from an existing signal. */
 export function readonly<T>(signal: WritableSignal<T>): ReadableSignal<T> {
-    const m = meta<CSignalNode<T>>(signal);
-    if (!(m._self instanceof CSignalNode)) {
+    const m = meta<SignalNode<T>>(signal);
+    if (!(m._self instanceof SignalNode)) {
         throw new SignalError("Expected a writable signal.");
     }
     return m._self.asReadable();
@@ -155,7 +153,7 @@ export function derived(...args: any[]): any {
         return [args.slice(0, -1).map(vnode), (a: any[]) => cb(...a)];
     }
 
-    const d = new CDerivedNode<any>(...fromArgs()).asDerived();
+    const d = new DerivedNode<any>(...fromArgs()).asDerived();
     execution.handler.changed(undefined, [d], undefined);
     return d;
 }
@@ -188,7 +186,7 @@ export function effect(...args: any[]): any {
         return [args.slice(0, -1).map(vnode), (a: any[]) => cb(...a)];
     }
 
-    const e = new CEffectNode(...fromArgs()).asEffect();
+    const e = new EffectNode(...fromArgs()).asEffect();
     execution.handler.changed(undefined, undefined, [e]);
     return e;
 }
@@ -198,15 +196,15 @@ export function propup<O, P extends PropertyKey, T>(o: O, p: P, s: WritableSigna
 export function propup<O, P extends PropertyKey, T>(o: O, p: P, s: ReadableSignal<T>): (O | {}) & ReadonlyProperty<P, T>;
 export function propup(o: any, p: any, s: any): any {
     const m = meta(s);
-    if (m._self instanceof CEffectNode) throw new SignalError("Expected a writable, readable, or derived signal.");
-    if (!(m._self instanceof CNode)) throw new SignalError("Not a signal primitive.")
+    if (m._self instanceof EffectNode) throw new SignalError("Expected a writable, readable, or derived signal.");
+    if (!(m._self instanceof Node)) throw new SignalError("Not a signal primitive.")
     return Object.defineProperty(o ?? {}, p, m.write == true ? { get: s, set: s } : { get: s });
 }
 
 /** Drops an effect or derived from execution handling. */
 export function drop(effectOrDerived: Effect | DerivedSignal<any>) {
     //TODO drop by setting flag instead
-    const m = meta<CDependentNode>(effectOrDerived);
+    const m = meta<DependentNode>(effectOrDerived);
     Object.values(m._self.triggers).forEach(x => {
         const i = x.dependents.findIndex(y => y.deref() === m._self);
         if (i >= 0) delete x.dependents[i];
@@ -218,7 +216,7 @@ export function drop(effectOrDerived: Effect | DerivedSignal<any>) {
  * Use this method at a convenient time when the {@link NoopExecution} handler is used.
  */
 export function update(items: DerivedSignal<any>[] | Effect[]) {
-    type UpdateNode = Meta<CDependentNode> & (() => unknown);
+    type UpdateNode = Meta<DependentNode> & (() => unknown);
 
     // Precheck the items before they are executed 
     const current = currN();
@@ -345,7 +343,7 @@ export function currN(): SequenceNumber {
 
 // Nodes and Dependencies
 
-abstract class CNode {
+abstract class Node {
     /** Unique node id used for matching and lookup */
     id: number;
     /** 
@@ -361,7 +359,7 @@ abstract class CNode {
     }
 }
 
-abstract class CDependentNode extends CNode {
+abstract class DependentNode extends Node {
     /** The sequence number when it was last checked against dependencies. */
     checked: SequenceNumber;
     /** The value dependencies this node directly depends on. */
@@ -370,7 +368,7 @@ abstract class CDependentNode extends CNode {
      * The writable dependencies that will trigger reevaluation.
      * Derived calculations are filtered out.
      */
-    readonly triggers: Record<NodeId, CSignalNode<any>>;
+    readonly triggers: Record<NodeId, SignalNode<any>>;
 
     constructor(dependencies: ValueNode<any>[]) {
         super(MIN_SEQ);
@@ -382,14 +380,14 @@ abstract class CDependentNode extends CNode {
     }
 
     /** Extracts the nodes that can trigger changes. */
-    private extractTriggers(dependencies: ValueNode<any>[]): Record<NodeId, CSignalNode<any>> {
-        const triggers = {} as Record<NodeId, CSignalNode<any>>;
+    private extractTriggers(dependencies: ValueNode<any>[]): Record<NodeId, SignalNode<any>> {
+        const triggers = {} as Record<NodeId, SignalNode<any>>;
 
         for (let i = 0; i < dependencies.length; i++) {
             const x = dependencies[i];
-            if (x instanceof CDependentNode) {
+            if (x instanceof DependentNode) {
                 Object.assign(triggers, x.triggers, triggers);
-            } else if (x instanceof CSignalNode) {
+            } else if (x instanceof SignalNode) {
                 triggers[x.id] = x
             }
         }
@@ -397,11 +395,11 @@ abstract class CDependentNode extends CNode {
     }
 }
 
-class CSignalNode<T> extends CNode {
+class SignalNode<T> extends Node {
     /** The current value of the given type */
-    value: T;
+    private value: T;
     /** Reverse of triggers */
-    dependents: WeakRef<CDependentNode>[];
+    readonly dependents: WeakRef<DependentNode>[];
 
     constructor(value: T) {
         super(nextN());
@@ -410,8 +408,8 @@ class CSignalNode<T> extends CNode {
     }
 
     /** Wrap node in a writable facade */
-    asWritable(): WritableSignal<T> & Meta<CSignalNode<T>> {
-        const f = this.sgetValue.bind(this) as WritableSignal<T> & Meta<CSignalNode<T>>;
+    asWritable(): WritableSignal<T> & Meta<SignalNode<T>> {
+        const f = this.sgetValue.bind(this) as WritableSignal<T> & Meta<SignalNode<T>>;
         Object.defineProperty(f, "id", { value: this.id, writable: false });
         Object.defineProperty(f, "_self", { value: this, writable: false });
         Object.defineProperty(f, "write", { value: true, writable: false });
@@ -420,7 +418,7 @@ class CSignalNode<T> extends CNode {
 
     /** Wrap node in a readable facade */
     asReadable(): ReadableSignal<T> & Meta<ValueNode<T>> {
-        const f = this.getValue.bind(this) as ReadableSignal<T> & Meta<CSignalNode<T>>;
+        const f = this.getValue.bind(this) as ReadableSignal<T> & Meta<SignalNode<T>>;
         Object.defineProperty(f, "id", { value: this.id, writable: false });
         Object.defineProperty(f, "_self", { value: this, writable: false });
         return f;
@@ -430,13 +428,13 @@ class CSignalNode<T> extends CNode {
     private getValue(value?: T): T {
         if (value) throw TypeError("Cannot modify a readonly signal");
         if (denyReentry && !allowReentryReadWrite) throw new ReentryError(ERR_REENTRY_READ);
-        return this.value!;
+        return this.value;
     }
 
     /** Get or set value on a writable value node. */
     private sgetValue(value?: T): T | void {
         if (denyReentry && !allowReentryReadWrite) throw new ReentryError(value == undefined ? ERR_REENTRY_READ : ERR_REENTRY_WRITE);
-        if (value == undefined) return this.value!;
+        if (value == undefined) return this.value;
         if (Object.is(this.value, value)) return;
         this.value = value;
         this.current = nextN();
@@ -447,10 +445,10 @@ class CSignalNode<T> extends CNode {
         const effects = [] as Effect[];
         deref(this.dependents, (d) => {
             if (noop) return;
-            if (d instanceof CDerivedNode) {
+            if (d instanceof DerivedNode) {
                 deriveds.push(d.asDerived())
             }
-            if (d instanceof CEffectNode) {
+            if (d instanceof EffectNode) {
                 effects.push(d.asEffect());
             }
         });
@@ -458,13 +456,17 @@ class CSignalNode<T> extends CNode {
             execution.handler.changed(this.asReadable(), deriveds, effects);
         }
     }
+
+    _get(): T {
+        return this.value;
+    }
 }
 
-class CDerivedNode<T> extends CDependentNode {
+class DerivedNode<T> extends DependentNode {
     /** The current value of the given type */
-    value?: T;
+    private value?: T;
     /** The calculation function to execute when dependencies change */
-    calculation: Calculation<T>;
+    private calculation: Calculation<T>;
 
     constructor(dependencies: ValueNode<any>[], calculation: Calculation<T>) {
         super(dependencies);
@@ -472,15 +474,15 @@ class CDerivedNode<T> extends CDependentNode {
         this.calculation = calculation;
     }
     /** Wrap node in a derived facade */
-    asDerived(): DerivedSignal<T> & Meta<CDerivedNode<T>> {
-        let f = this.calcDerivedNode.bind(this) as DerivedSignal<T> & Meta<CDerivedNode<T>>;
+    asDerived(): DerivedSignal<T> & Meta<DerivedNode<T>> {
+        let f = this.calc.bind(this) as DerivedSignal<T> & Meta<DerivedNode<T>>;
         Object.defineProperty(f, "id", { value: this.id, writable: false });
         Object.defineProperty(f, "_self", { value: this, writable: false });
         return f;
     }
 
-    /**  Performs a dependency check and calculates if it is outdated. Returns the current value. */
-    private calcDerivedNode(value?: T): T {
+    /** Calculates the derived value. May be called manually or via an execution handler */
+    private calc(value?: T): T {
         if (value) throw TypeError("Cannot modify a derived signal");
         if (denyReentry && !allowReentryReadWrite) throw new ReentryError(ERR_REENTRY_READ);
 
@@ -490,7 +492,7 @@ class CDerivedNode<T> extends CDependentNode {
         try {
             denyReentry = true;
             allowReentryReadWrite = false;
-            return this.checkDerivedNode(currN());
+            return this._calc(currN());
         }
         finally {
             // Restore previous state
@@ -500,15 +502,15 @@ class CDerivedNode<T> extends CDependentNode {
     }
 
     /**
-     * Performs dependency checks and calculates if it is outdated 
+     * Performs the dependency checks and calculates if it is outdated.
      * Returns the latest value.
     */
-    checkDerivedNode(check: SequenceNumber): T {
+    _calc(check: SequenceNumber): T {
         if (check > this.checked) {
             const max = Object.values(this.triggers).reduce((x, c) => x.current > c.current ? x : c).current;
             if (max > this.checked) {
                 // Changes has occured in the dependencies.
-                const values = this.dependencies.map((x) => x instanceof CDerivedNode ? x.checkDerivedNode(check) : x.value!);
+                const values = this.dependencies.map((x) => x instanceof DerivedNode ? x._calc(check) : x._get());
 
                 // Dependencies have changed or this is a new node. Recalculate.
                 this.value = this.calculation(values);
@@ -521,34 +523,32 @@ class CDerivedNode<T> extends CDependentNode {
         }
         return this.value!;
     }
-
-
 }
 
-class CEffectNode extends CDependentNode {
-    /** The action function to execute when dependencies change */
-    action: Action;
+class EffectNode extends DependentNode {
+    /** The user provided action function to execute when dependencies change. */
+    private action: Action;
+
     constructor(dependencies: ValueNode<any>[], action: Action) {
         super(dependencies);
         this.action = action;
     }
 
     /** Wrap node in an effect facade */
-    asEffect(): Effect & Meta<CEffectNode> {
-        let f = this.actEffectNode.bind(this) as Effect & Meta<CEffectNode>;
+    asEffect(): Effect & Meta<EffectNode> {
+        let f = this.act.bind(this) as Effect & Meta<EffectNode>;
         Object.defineProperty(f, "id", { value: this.id, writable: false });
         Object.defineProperty(f, "_self", { value: this, writable: false });
-        Object.defineProperty(f, "act", { value: true, writable: false });
         return f;
     }
 
-    /** Performs a dependency check and acts if it is outdated. */
-    private actEffectNode(): void {
+    /** Act on the effect. May be called manually or via an execution handler */
+    private act(): void {
         if (denyReentry) throw new ReentryError(ERR_REENTRY_READ);
         try {
             denyReentry = true;
             allowReentryReadWrite = true;
-            this.checkEffectNode(currN());
+            this._act(currN());
         }
         finally {
             denyReentry = false;
@@ -556,13 +556,13 @@ class CEffectNode extends CDependentNode {
         }
     }
 
-    /** Performs dependency checks and acts if it is outdated */
-    private checkEffectNode(check: SequenceNumber): void {
+    /** Performs the dependency checks and executes the action if it is outdated */
+    private _act(check: SequenceNumber): void {
         if (check > this.checked) {
             const max = Object.values(this.triggers).reduce((x, c) => x.current > c.current ? x : c).current;
             if (max > this.checked) {
                 // Changes has occured in the dependencies.
-                const values = this.dependencies.map((x) => x instanceof CDerivedNode ? x.checkDerivedNode(check) : x.value!);
+                const values = this.dependencies.map((x) => x instanceof DerivedNode ? x._calc(check) : x._get());
 
                 // Dependencies have changed or this is a new node. React.
                 this.action(values);
@@ -576,7 +576,7 @@ class CEffectNode extends CDependentNode {
     }
 }
 
-type ValueNode<T> = CSignalNode<T>  | CDerivedNode<T>;
+type ValueNode<T> = SignalNode<T> | DerivedNode<T>;
 
 /** Calculation signature */
 type Calculation<T> = (args: any[]) => T;
@@ -591,9 +591,7 @@ type Meta<F> = {
     /** The reference field that is added to the function facades. Same as 'this' inside the methods. */
     _self: F,
     /** True if the provided function can be used as a setter */
-    write?: boolean,
-    /** True if the provided function will execute an effect action */
-    act?: boolean
+    write?: boolean
 };
 
 type Deref<T> = { deref: () => T | undefined };
@@ -626,7 +624,7 @@ function vnode<T>(signal: ReadableSignal<T>): ValueNode<T> {
 }
 
 /** Get metadata from a signal function facade */
-function meta<F>(signal: any) : Meta<F> {
+function meta<F>(signal: any): Meta<F> {
     return signal as Meta<F>;
 }
 
