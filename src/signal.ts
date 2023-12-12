@@ -274,9 +274,8 @@ export const execution = { handler: ManualExecution as ExecutionHandler };
 
 //#region Flags and Counters
 // Call tracking
-let depsTrack: Node[] | undefined = undefined;
-let denyCall = false;
-let denyWrite = false;
+type CallTrackState = { depsTrack: Node[] | undefined, denyCall: boolean, denyWrite: boolean };
+let track:CallTrackState = { depsTrack: undefined, denyCall: false, denyWrite: false };
 const ERR_CALL = "Calling an effect within a derived/effect callback is not allowed.";
 const ERR_WRITE = "Writing to a signal within a derived callback is not allowed";
 const ERR_LOOP = "Recursive loop detected";
@@ -470,16 +469,16 @@ class SignalNode<T> extends Node {
 
     private get(value?: T): T {
         if (value) throw TypeError("Cannot modify a readonly signal");
-        depsTrack?.push(this);
+        track.depsTrack?.push(this);
         return this.value;
     }
 
     private sget(value?: T): T | void {
         if (value == undefined) {
-            depsTrack?.push(this);
+            track.depsTrack?.push(this);
             return this.value;
         };
-        if (denyWrite) throw new ReentryError(ERR_WRITE);
+        if (track.denyWrite) throw new ReentryError(ERR_WRITE);
         if (Object.is(this.value, value)) return;
         this.value = value;
         this.current = nextN();
@@ -528,7 +527,7 @@ abstract class DerivedNode<T> extends DependentNode {
 
     value(check: SequenceNumber): T {
         if (this.visited) throw new ReentryError(ERR_LOOP);
-        depsTrack?.push(this);
+        track.depsTrack?.push(this);
         if (!this.dropped && check > this.checked) {
             this.do(check);
 
@@ -592,21 +591,17 @@ class FixedDerivedNode<T> extends DerivedNode<T> {
             const values = this.values(check);
 
             // Store previous state.
-            const prevDenyCall = denyCall;
-            const prevDenyWrite = denyWrite;
+            const prev = track;
             try {
-                denyCall = true;
-                denyWrite = true;
-
                 // Execute callback
+                track = { depsTrack: undefined, denyCall: true, denyWrite: true };
                 this.visited = true;
                 this._value = this.cb(values);
                 this.current = max;
             }
             finally {
                 // Restore previous state
-                denyCall = prevDenyCall;
-                denyWrite = prevDenyWrite;
+                track = prev;
                 this.visited = false;
             }
         }
@@ -631,7 +626,7 @@ abstract class EffectNode extends DependentNode {
     private facade(): void {
         const check = currN();
         if (this.visited) throw new ReentryError(ERR_LOOP);
-        if (denyCall) throw new ReentryError(ERR_CALL);
+        if (track.denyCall) throw new ReentryError(ERR_CALL);
         if (!this.dropped && check > this.checked) {
             this.do(check);
 
@@ -687,21 +682,17 @@ class FixedEffectNode extends EffectNode {
             const values = this.values(check);
 
             // Store previous state.
-            const prevDenyCall = denyCall;
-            const prevDenyWrite = denyWrite;
+            const prev = track;
             try {
-                denyCall = true;
-                denyWrite = false;
-
                 // Execute callback
+                track = { depsTrack: undefined, denyCall: true, denyWrite: false };
                 this.visited = true;
                 this.cb(values);
                 this.current = max;
             }
             finally {
                 // Restore previous state
-                denyCall = prevDenyCall;
-                denyWrite = prevDenyWrite;
+                track = prev;
                 this.visited = false;
             }
         }
