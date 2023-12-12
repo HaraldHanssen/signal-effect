@@ -26,9 +26,9 @@ Reactive signal library without any dependencies.
 
 - **Reentry Prevention**
 
-    Will throw error if ```derived``` calculations actions try to reenter the signal system and e.g. grab values it does not depend upon.
+    Will throw error if a loop is detected, or if a ```derived``` calculations try to write to ```signal```s.
     
-    ```effect```s are allowed to manually read and write back to the signals again, this _will not_ cause endless recursion until stack overflow. The calculations and effects are just snapshots. Also, the ```effect``` clause will not react to values only used inside the callback.
+    ```effect```s are allowed to manually read and write back to the signals again, this _will not_ cause endless recursion until stack overflow. The calculations and effects are snapshots.
 
 - **GC Friendly**
 
@@ -54,7 +54,7 @@ Reactive signal library without any dependencies.
 
 - **Custom**
 
-    Roll your own strategy.
+    Roll your own strategy. Implement the _ExecutionHandler_ interface, it notifies each ```signal``` change and provides the affected ```derived```s and ```effect```s.
 
 ## Examples
 ### Create a signal

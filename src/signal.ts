@@ -142,11 +142,10 @@ export function readonly<T>(signal: WritableSignal<T>): ReadableSignal<T> {
 /** 
  * Create a derived/calculated signal from one or more sources.
  * 
- * To avoid side effects the calculation function is not allowed to reenter the signal system,
- * this means the provided callback must avoid to manually
- * (a) get a value from a writable/readonly/derived signal, or
- * (b) set a value on a writable, or
- * (c) execute an effect.
+ * To avoid side effects the calculation function is not allowed to reenter the signal system to:
+ * (a) set a value on a writable, or
+ * (b) execute an effect.
+ * Reading values from signals are allowed.
 */
 export function derived<P extends ReadableSignalType, T>(r: P, calc: (r: ReadableSignalValue<P>) => T): DerivedSignal<T>;
 export function derived<P1 extends ReadableSignalType, P2 extends ReadableSignalType, T>
@@ -158,8 +157,14 @@ export function derived<P1 extends ReadableSignalType, P2 extends ReadableSignal
 export function derived<P1 extends ReadableSignalType, P2 extends ReadableSignalType, P3 extends ReadableSignalType, P4 extends ReadableSignalType, P5 extends ReadableSignalType, T>
     (r1: P1, r2: P2, r3: P3, r4: P4, r5: P5, calc: (r1: ReadableSignalValue<P1>, r2: ReadableSignalValue<P2>, r3: ReadableSignalValue<P3>, r4: ReadableSignalValue<P4>, r5: ReadableSignalValue<P5>) => T): DerivedSignal<T>;
 export function derived<P extends ReadableSignalTypes, T>(sources: P, calc: (values: ReadableSignalValues<P>) => T): DerivedSignal<T>
+export function derived<T>(calc: () => T): DerivedSignal<T>
 export function derived(...args: any[]): any {
-    if (args.length < 2) throw new SignalError("Expected at least 2 parameters!");
+    if (args.length < 1) throw new SignalError("Expected at least 1 parameters!");
+    if (args.length == 1) {
+        const d = new DynamicDerivedNode<any>(args[0]).asDerived();
+        execution.handler.changed(undefined, [d], undefined);
+        return d;
+    }
 
     function fromArgs(): [ValueNode<any>[], Calculation<any>] {
         if (args.length == 2 && Array.isArray(args[0])) {
@@ -170,7 +175,7 @@ export function derived(...args: any[]): any {
         return [args.slice(0, -1).map(vnode), (a: any[]) => cb(...a)];
     }
 
-    const d = new DerivedNode<any>(...fromArgs()).asDerived();
+    const d = new FixedDerivedNode<any>(...fromArgs()).asDerived();
     execution.handler.changed(undefined, [d], undefined);
     return d;
 }
@@ -263,10 +268,12 @@ export const execution = { handler: ManualExecution as ExecutionHandler };
 
 //#region Flags and Counters
 // Call tracking
-let denyReentry = false;
-let allowReentryReadWrite = false;
-const ERR_REENTRY_READ = "Reading a signal manually within a derived/effect callback is not allowed. Pass the signal as a dependency instead.";
-const ERR_REENTRY_WRITE = "Writing to a signal within a derived callback is not allowed";
+let depsTrack: Node[] | undefined = undefined;
+let denyCall = false;
+let denyWrite = false;
+const ERR_CALL = "Calling an effect within a derived/effect callback is not allowed.";
+const ERR_WRITE = "Writing to a signal within a derived callback is not allowed";
+const ERR_LOOP = "Recursive loop detected";
 
 // Monotonically increasing id number
 type NodeId = number;
@@ -302,16 +309,7 @@ function createManualExecutionHandler(): ManualExecutionHandler {
         // Precheck the items before they are executed 
         const current = currN();
         (items as UpdateNode[])
-            .filter(x => {
-                const self = x._self;
-                if (current > self.checked) {
-                    if (vals(self.triggers).some(y => y.current > self.checked)) {
-                        return true;
-                    }
-                    self.checked = current;
-                }
-                return false;
-            })
+            .filter(x => x._self.precheck(current))
             .forEach(x => x());
     }
 
@@ -353,47 +351,72 @@ function createDelayedExecutionHandler(): DelayedExecutionHandler {
  * @prop {} current The sequence number representing the current value or effect. 
  */
 abstract class Node {
-    id: NodeId;
-    current: SequenceNumber;
+    readonly id: NodeId;
+    private _current: SequenceNumber;
+
+    get current() { return this._current; }
+    protected set current(v: SequenceNumber) { this._current = v };
 
     constructor(current: SequenceNumber) {
         this.id = nextId();
-        this.current = current;
+        this._current = current;
+    }
+}
+
+/**
+ * Base node for those that execute callbacks.
+ * For this node the {@link Node.current} value is the maximum of all its node dependencies when it was last executed. 
+ * @prop {} checked The sequence number when it was last checked against dependencies.
+ * @prop {} visited The visited flag is used for loop detection.
+ * @prop {} dropped True if the node is dropped from execution.
+ * @method drop Drops the node from further execution.
+ */
+
+abstract class ComplexNode extends Node {
+    protected checked: SequenceNumber;
+    protected visited: boolean = false;
+    private _dropped: boolean = false;
+
+    constructor() {
+        super(MIN_SEQ);
+        this.checked = MIN_SEQ;
+    }
+
+    get dropped() { return this._dropped; }
+
+    drop() {
+        this._dropped = true;
     }
 }
 
 /**
  * Base node for those that depend on others.
- * For dependent nodes the {@link Node.current} value is the maximum of all its node dependencies when it was last calculated. 
- * @prop {} checked The sequence number when it was last checked against dependencies.
- * @prop {} dependencies The value dependencies this node directly depends on.
+ * @prop {} deps The value dependencies this node directly depends on.
  * @prop {} triggers The writable dependencies that will trigger reevaluation. Derived calculations are filtered out.
- * @prop {} dropped True if the node is dropped from execution.
- * @method drop Drops the node from further execution.
  */
-abstract class DependentNode extends Node {
-    checked: SequenceNumber;
-    readonly deps: ValueNode<any>[];
-    readonly triggers: Record<NodeId, SignalNode<any>>;
-    private _dropped: boolean = false;
+abstract class DependentNode extends ComplexNode {
+    abstract get deps(): ValueNode<any>[];
+    abstract get triggers(): Record<NodeId, SignalNode<any>>;
 
-    constructor(deps: ValueNode<any>[]) {
-        super(MIN_SEQ);
-        this.checked = MIN_SEQ;
-        this.deps = deps;
-        this.triggers = this.getTriggers();
-        vals(this.triggers).forEach(x => x.trigs.push(new WeakRef(this)));
+    precheck(current: SequenceNumber): boolean {
+        if (current > this.checked) {
+            if (vals(this.triggers).some(y => y.current > this.checked)) {
+                return true;
+            }
+            this.checked = current;
+        }
+        return false;
     }
 
-    get dropped() {
-        return this._dropped;
+    protected max(): SequenceNumber {
+        return vals(this.triggers).reduce((x, c) => x.current > c.current ? x : c).current;
     }
 
-    drop() {
-        this._dropped = true;
+    protected values(check: SequenceNumber): any[] {
+        return this.deps.map((x) => x instanceof DerivedNode ? x.value(check) : x._get())
     }
 
-    private getTriggers(): Record<NodeId, SignalNode<any>> {
+    protected extractTriggers(): Record<NodeId, SignalNode<any>> {
         const t = {} as Record<NodeId, SignalNode<any>>;
 
         for (let i = 0; i < this.deps.length; i++) {
@@ -442,13 +465,16 @@ class SignalNode<T> extends Node {
 
     private get(value?: T): T {
         if (value) throw TypeError("Cannot modify a readonly signal");
-        if (denyReentry && !allowReentryReadWrite) throw new ReentryError(ERR_REENTRY_READ);
+        depsTrack?.push(this);
         return this.value;
     }
 
     private sget(value?: T): T | void {
-        if (denyReentry && !allowReentryReadWrite) throw new ReentryError(value == undefined ? ERR_REENTRY_READ : ERR_REENTRY_WRITE);
-        if (value == undefined) return this.value;
+        if (value == undefined) {
+            depsTrack?.push(this);
+            return this.value;
+        };
+        if (denyWrite) throw new ReentryError(ERR_WRITE);
         if (Object.is(this.value, value)) return;
         this.value = value;
         this.current = nextN();
@@ -477,18 +503,15 @@ class SignalNode<T> extends Node {
 }
 
 /**
- * The node for derived signals.    
- * @prop {} value The current value of the given type
+ * The base node for derived signals.    
  * @method asDerived Wrap node in a derived facade. May be called manually via or via an execution handler.
+ * @method value The current value of the given type.
  */
-class DerivedNode<T> extends DependentNode {
-    private value?: T;
-    private cb: Calculation<T>;
-
-    constructor(dependencies: ValueNode<any>[], calculation: Calculation<T>) {
-        super(dependencies);
-        this.value = undefined;
-        this.cb = calculation;
+abstract class DerivedNode<T> extends DependentNode {
+    protected _value?: T;
+    constructor() {
+        super();
+        this._value = undefined;
     }
 
     asDerived(): DerivedSignal<T> & Meta<DerivedNode<T>> {
@@ -498,41 +521,95 @@ class DerivedNode<T> extends DependentNode {
         return f;
     }
 
-    private calc(value?: T): T {
-        if (value) throw TypeError("Cannot modify a derived signal");
-        if (denyReentry && !allowReentryReadWrite) throw new ReentryError(ERR_REENTRY_READ);
+    abstract value(check: SequenceNumber): T;
 
-        // Store previous state, we might be inside the callback of an effect node.
-        const prevDenyReentry = denyReentry;
-        const prevAllowReentryReadWrite = allowReentryReadWrite;
-        try {
-            denyReentry = true;
-            allowReentryReadWrite = false;
-            return this._calc(currN());
-        }
-        finally {
-            // Restore previous state
-            denyReentry = prevDenyReentry;
-            allowReentryReadWrite = prevAllowReentryReadWrite;
-        }
+    private calc(v?: T): T {
+        if (v) throw TypeError("Cannot modify a derived signal");
+        return this.value(currN());
+    }
+}
+
+/**
+ * The node for derived signals with dynamic dependencies.    
+ */
+class DynamicDerivedNode<T> extends DerivedNode<T> {
+    private cb: () => T;
+
+    get deps(): ValueNode<any>[] { return []; }
+    get triggers(): Record<NodeId, SignalNode<any>> { return []; }
+
+    constructor(calculation: () => T) {
+        super();
+        this.cb = calculation;
     }
 
-    _calc(check: SequenceNumber): T {
+    value(check: SequenceNumber): T {
+        if (this.visited) throw new ReentryError(ERR_LOOP);
+        depsTrack?.push(this);
         if (!this.dropped && check > this.checked) {
-            const max = vals(this.triggers).reduce((x, c) => x.current > c.current ? x : c).current;
+            this._value = this.cb();
+
+            // Derived nodes updates the sequence number each time a change check is performed.
+            // Since dependencies are fixed, this will filter out unneccessary traversals.
+            this.checked = check;
+        }
+        return this._value!;
+    }
+}
+
+/**
+ * The node for derived signals with fixed dependencies.    
+ */
+class FixedDerivedNode<T> extends DerivedNode<T> {
+    private readonly _deps: ValueNode<any>[];
+    private readonly _triggers: Record<NodeId, SignalNode<any>>;
+    private cb: Calculation<T>;
+
+    get deps() { return this._deps; }
+    get triggers() { return this._triggers; }
+
+    constructor(dependencies: ValueNode<any>[], calculation: Calculation<T>) {
+        super();
+        this._deps = dependencies;
+        this._triggers = this.extractTriggers();
+        this.cb = calculation;
+        vals(this.triggers).forEach(x => x.trigs.push(new WeakRef(this)));
+    }
+
+    value(check: SequenceNumber): T {
+        if (this.visited) throw new ReentryError(ERR_LOOP);
+        depsTrack?.push(this);
+        if (!this.dropped && check > this.checked) {
+            const max = this.max();
             if (max > this.checked) {
                 // Changes has occured in the dependencies.
-                const values = this.deps.map((x) => x instanceof DerivedNode ? x._calc(check) : x._get());
+                const values = this.values(check);
 
-                this.value = this.cb(values);
-                this.current = max;
+                // Store previous state.
+                const prevDenyCall = denyCall;
+                const prevDenyWrite = denyWrite;
+                try {
+                    denyCall = true;
+                    denyWrite = true;
+
+                    // Execute callback
+                    this.visited = true;
+                    this._value = this.cb(values);
+                    this.current = max;
+                }
+                finally {
+                    // Restore previous state
+                    denyCall = prevDenyCall;
+                    denyWrite = prevDenyWrite;
+                    this.visited = false;
+                }
             }
 
             // Derived nodes updates the sequence number each time a change check is performed.
             // Since dependencies are fixed, this will filter out unneccessary traversals.
             this.checked = check;
         }
-        return this.value!;
+        return this._value!;
     }
 }
 
@@ -541,11 +618,19 @@ class DerivedNode<T> extends DependentNode {
  * @method asEffect Wrap node in an effect facade. May be called manually via or via an execution handler.
  */
 class EffectNode extends DependentNode {
+    private readonly _deps: ValueNode<any>[];
+    private readonly _triggers: Record<NodeId, SignalNode<any>>;
     private cb: Action;
 
+    get deps() { return this._deps; }
+    get triggers() { return this._triggers; }
+
     constructor(dependencies: ValueNode<any>[], action: Action) {
-        super(dependencies);
+        super();
+        this._deps = dependencies;
+        this._triggers = this.extractTriggers();
         this.cb = action;
+        vals(this.triggers).forEach(x => x.trigs.push(new WeakRef(this)));
     }
 
     asEffect(): Effect & Meta<EffectNode> {
@@ -556,27 +641,36 @@ class EffectNode extends DependentNode {
     }
 
     private act(): void {
-        if (denyReentry) throw new ReentryError(ERR_REENTRY_READ);
-        try {
-            denyReentry = true;
-            allowReentryReadWrite = true;
-            this._act(currN());
-        }
-        finally {
-            denyReentry = false;
-            allowReentryReadWrite = false;
-        }
+        this._act(currN());
     }
 
     private _act(check: SequenceNumber): void {
+        if (this.visited) throw new ReentryError(ERR_LOOP);
+        if (denyCall) throw new ReentryError(ERR_CALL);
         if (!this.dropped && check > this.checked) {
-            const max = vals(this.triggers).reduce((x, c) => x.current > c.current ? x : c).current;
+            const max = this.max();
             if (max > this.checked) {
                 // Changes has occured in the dependencies.
-                const values = this.deps.map((x) => x instanceof DerivedNode ? x._calc(check) : x._get());
+                const values = this.values(check);
 
-                this.cb(values);
-                this.current = max;
+                // Store previous state.
+                const prevDenyCall = denyCall;
+                const prevDenyWrite = denyWrite;
+                try {
+                    denyCall = true;
+                    denyWrite = false;
+
+                    // Execute callback
+                    this.visited = true;
+                    this.cb(values);
+                    this.current = max;
+                }
+                finally {
+                    // Restore previous state
+                    denyCall = prevDenyCall;
+                    denyWrite = prevDenyWrite;
+                    this.visited = false;
+                }
             }
 
             // Effect nodes updates the sequence number each time a change check is performed.

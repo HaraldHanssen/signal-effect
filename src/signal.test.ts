@@ -2,7 +2,7 @@
  * @license MIT
  * Copyright (c) 2023 Harald Hanssen
  */
-import { ReentryError, propup, derived, effect, readonly, signal, signals, update, SignalError, ExecutionHandler, execution, ImmediateExecution, _private, DelayedExecution, drop, ReadableSignal, DelayedExecutionHandler } from "./signal";
+import { ReentryError, propup, derived, effect, readonly, signal, signals, update, SignalError, ExecutionHandler, execution, ImmediateExecution, _private, DelayedExecution, drop, ReadableSignal, DelayedExecutionHandler, DerivedSignal } from "./signal";
 
 const jestConsole = console;
 
@@ -348,39 +348,84 @@ describe("Basics", () => {
     });
 });
 
+describe("Dynamic Dependencies", () => {
+    test("calc derived value of 1 signal", () => {
+        let calculated = 0;
+        const s = signal(42);
+        const d = derived(() => {
+            calculated++;
+            return 2 * s();
+        })
+        expect(calculated).toBe(0);
+        expect(d()).toBe(84);
+        expect(calculated).toBe(1);
+        s(43);
+        expect(calculated).toBe(1);
+        expect(d()).toBe(86);
+        expect(calculated).toBe(2);
+        expect(d()).toBe(86);
+        expect(calculated).toBe(2);
+    });
+});
+
 describe("Permissions", () => {
-    test("deny readonly wrapping of a derived signal", () => {
+    test("deny readonly wrapping of derived", () => {
         const s = signal(42);
         const a = derived(s, (x) => x);
         expect(() => readonly(a as any)).toThrow(SignalError);
     });
 
-    test("deny reentry in derived calculations", () => {
+    test("allow reentry to read in derived", () => {
         const s = signal(42);
         const justCalc = derived(s, (x) => x);
-        const justAct = effect(s, () => { });
         const enterGet = derived(s, (x) => x + s());
+        const enterCalc = derived(s, (x) => x + justCalc());
+
+        for (let i = 42; i < 45; i++) {
+            s(i);
+            expect(enterGet()).toBe(i + i);
+            expect(enterCalc()).toBe(i + i);
+        }
+    });
+    test("deny reentry to write in derived", () => {
+        const s = signal(42);
+        const justCalc = derived(s, (x) => x);
         const enterSet = derived(s, (x) => {
             s(x);
             return x;
         });
-        const enterCalc = derived(s, (_) => justCalc());
+
+        for (let i = 42; i < 45; i++) {
+            s(i);
+            expect(enterSet).toThrow(ReentryError);
+            expect(justCalc()).toBe(i); // Not denied
+        }
+    });
+    test("deny reentry looping in derived", () => {
+        const s = signal(42);
+        const justCalc = derived(s, (x) => x);
+        const enterLoop:DerivedSignal<number> = derived(s, (x) => x + enterLoop() + justCalc());
+
+        for (let i = 42; i < 45; i++) {
+            s(i);
+            expect(enterLoop).toThrow(ReentryError);
+            expect(justCalc()).toBe(i); // Not denied
+        }
+    });
+    test("deny reentry to effect in derived", () => {
+        const s = signal(42);
+        const justCalc = derived(s, (x) => x);
+        const justAct = effect(s, () => { });
         const enterAct = derived(s, (_) => justAct());
 
         for (let i = 42; i < 45; i++) {
             s(i);
-            expect(enterGet).toThrow(ReentryError);
-            expect(justCalc()).toBe(i); // Not denied
-            expect(enterSet).toThrow(ReentryError);
-            expect(justCalc()).toBe(i); // Not denied
-            expect(enterCalc).toThrow(ReentryError);
-            expect(justCalc()).toBe(i); // Not denied
             expect(enterAct).toThrow(ReentryError);
             expect(justCalc()).toBe(i); // Not denied
         }
 
     });
-    test("deny reentry to execute in effect actions", () => {
+    test("deny reentry to effect in effect", () => {
         const s = signal(42);
         const justCalc = derived(s, (x) => x);
         const justAct = effect(s, () => { });
@@ -393,7 +438,7 @@ describe("Permissions", () => {
             expect(justCalc()).toBe(i);
         }
     });
-    test("allow reentry to read in effect actions", () => {
+    test("allow reentry to read in effect", () => {
         // Will not set up dependency
         const s = signal(40);
         const t = signal(2);
@@ -411,7 +456,7 @@ describe("Permissions", () => {
             expect(enterCalcResult).toBe(i + 2);
         }
     });
-    test("allow reentry to write in effect actions (even in a feedback loop)", () => {
+    test("allow reentry to write in effect (even in a feedback loop)", () => {
         // Writing can be set up as a feedback loop, in some type of calculations this
         // is ok (e.g. integration). The evaluation only samples the effect each execution.
 
