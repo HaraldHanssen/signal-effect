@@ -274,8 +274,8 @@ export const execution = { handler: ManualExecution as ExecutionHandler };
 
 //#region Flags and Counters
 // Call tracking
-type CallTrackState = { depsTrack: Node[] | undefined, denyCall: boolean, denyWrite: boolean };
-let track:CallTrackState = { depsTrack: undefined, denyCall: false, denyWrite: false };
+type CallTrackState = { deps: Node[] | undefined, nocall: boolean, nowrite: boolean };
+let track:CallTrackState = { deps: undefined, nocall: false, nowrite: false };
 const ERR_CALL = "Calling an effect within a derived/effect callback is not allowed.";
 const ERR_WRITE = "Writing to a signal within a derived callback is not allowed";
 const ERR_LOOP = "Recursive loop detected";
@@ -469,16 +469,16 @@ class SignalNode<T> extends Node {
 
     private get(value?: T): T {
         if (value) throw TypeError("Cannot modify a readonly signal");
-        track.depsTrack?.push(this);
+        track.deps?.push(this);
         return this.value;
     }
 
     private sget(value?: T): T | void {
         if (value == undefined) {
-            track.depsTrack?.push(this);
+            track.deps?.push(this);
             return this.value;
         };
-        if (track.denyWrite) throw new ReentryError(ERR_WRITE);
+        if (track.nowrite) throw new ReentryError(ERR_WRITE);
         if (Object.is(this.value, value)) return;
         this.value = value;
         this.current = nextN();
@@ -527,7 +527,7 @@ abstract class DerivedNode<T> extends DependentNode {
 
     value(check: SequenceNumber): T {
         if (this.visited) throw new ReentryError(ERR_LOOP);
-        track.depsTrack?.push(this);
+        track.deps?.push(this);
         if (!this.dropped && check > this.checked) {
             this.do(check);
 
@@ -594,7 +594,7 @@ class FixedDerivedNode<T> extends DerivedNode<T> {
             const prev = track;
             try {
                 // Execute callback
-                track = { depsTrack: undefined, denyCall: true, denyWrite: true };
+                track = { deps: undefined, nocall: true, nowrite: true };
                 this.visited = true;
                 this._value = this.cb(values);
                 this.current = max;
@@ -626,7 +626,7 @@ abstract class EffectNode extends DependentNode {
     private facade(): void {
         const check = currN();
         if (this.visited) throw new ReentryError(ERR_LOOP);
-        if (track.denyCall) throw new ReentryError(ERR_CALL);
+        if (track.nocall) throw new ReentryError(ERR_CALL);
         if (!this.dropped && check > this.checked) {
             this.do(check);
 
@@ -685,7 +685,7 @@ class FixedEffectNode extends EffectNode {
             const prev = track;
             try {
                 // Execute callback
-                track = { depsTrack: undefined, denyCall: true, denyWrite: false };
+                track = { deps: undefined, nocall: true, nowrite: false };
                 this.visited = true;
                 this.cb(values);
                 this.current = max;
