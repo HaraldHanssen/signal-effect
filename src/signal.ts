@@ -156,8 +156,8 @@ export function derived<P1 extends ReadableSignalType, P2 extends ReadableSignal
     (r1: P1, r2: P2, r3: P3, r4: P4, calc: (r1: ReadableSignalValue<P1>, r2: ReadableSignalValue<P2>, r3: ReadableSignalValue<P3>, r4: ReadableSignalValue<P4>) => T): DerivedSignal<T>;
 export function derived<P1 extends ReadableSignalType, P2 extends ReadableSignalType, P3 extends ReadableSignalType, P4 extends ReadableSignalType, P5 extends ReadableSignalType, T>
     (r1: P1, r2: P2, r3: P3, r4: P4, r5: P5, calc: (r1: ReadableSignalValue<P1>, r2: ReadableSignalValue<P2>, r3: ReadableSignalValue<P3>, r4: ReadableSignalValue<P4>, r5: ReadableSignalValue<P5>) => T): DerivedSignal<T>;
-export function derived<P extends ReadableSignalTypes, T>(sources: P, calc: (values: ReadableSignalValues<P>) => T): DerivedSignal<T>
-export function derived<T>(calc: () => T): DerivedSignal<T>
+export function derived<P extends ReadableSignalTypes, T>(sources: P, calc: (values: ReadableSignalValues<P>) => T): DerivedSignal<T>;
+export function derived<T>(calc: () => T): DerivedSignal<T>;
 export function derived(...args: any[]): any {
     if (args.length < 1) throw new SignalError("Expected at least 1 parameters!");
     if (args.length == 1) {
@@ -200,9 +200,15 @@ export function effect<P1 extends ReadableSignalType, P2 extends ReadableSignalT
     (r1: P1, r2: P2, r3: P3, r4: P4, act: (r1: ReadableSignalValue<P1>, r2: ReadableSignalValue<P2>, r3: ReadableSignalValue<P3>, r4: ReadableSignalValue<P4>) => void): Effect;
 export function effect<P1 extends ReadableSignalType, P2 extends ReadableSignalType, P3 extends ReadableSignalType, P4 extends ReadableSignalType, P5 extends ReadableSignalType>
     (r1: P1, r2: P2, r3: P3, r4: P4, r5: P5, act: (r1: ReadableSignalValue<P1>, r2: ReadableSignalValue<P2>, r3: ReadableSignalValue<P3>, r4: ReadableSignalValue<P4>, r5: ReadableSignalValue<P5>) => void): Effect;
-export function effect<P extends ReadableSignalTypes>(sources: P, act: (values: ReadableSignalValues<P>) => void): Effect
+export function effect<P extends ReadableSignalTypes>(sources: P, act: (values: ReadableSignalValues<P>) => void): Effect;
+export function effect(act: () => void): Effect;
 export function effect(...args: any[]): any {
-    if (args.length < 2) throw new SignalError("Expected at least 2 parameters!");
+    if (args.length < 1) throw new SignalError("Expected at least 1 parameters!");
+    if (args.length == 1) {
+        const d = new DynamicEffectNode(args[0]).asEffect();
+        execution.handler.changed(undefined, [d], undefined);
+        return d;
+    }
 
     function fromArgs(): [ValueNode<any>[], Action] {
         if (args.length == 2 && Array.isArray(args[0])) {
@@ -213,7 +219,7 @@ export function effect(...args: any[]): any {
         return [args.slice(0, -1).map(vnode), (a: any[]) => cb(...a)];
     }
 
-    const e = new EffectNode(...fromArgs()).asEffect();
+    const e = new FixedEffectNode(...fromArgs()).asEffect();
     execution.handler.changed(undefined, undefined, [e]);
     return e;
 }
@@ -371,7 +377,6 @@ abstract class Node {
  * @prop {} dropped True if the node is dropped from execution.
  * @method drop Drops the node from further execution.
  */
-
 abstract class ComplexNode extends Node {
     protected checked: SequenceNumber;
     protected visited: boolean = false;
@@ -614,10 +619,56 @@ class FixedDerivedNode<T> extends DerivedNode<T> {
 }
 
 /**
- * The node for effect actions.
+ * The base node for effect actions.
  * @method asEffect Wrap node in an effect facade. May be called manually via or via an execution handler.
  */
-class EffectNode extends DependentNode {
+abstract class EffectNode extends DependentNode {
+
+    asEffect(): Effect & Meta<EffectNode> {
+        let f = this.act.bind(this) as Effect & Meta<EffectNode>;
+        def(f, "id", { value: this.id, writable: false });
+        def(f, "_self", { value: this, writable: false });
+        return f;
+    }
+
+    protected abstract invoke(check: SequenceNumber): void;
+
+    private act(): void {
+        this.invoke(currN());
+    }
+}
+
+/**
+ * The node for effect actions with dynamic dependencies.
+ */
+class DynamicEffectNode extends EffectNode {
+    private cb: () => void;
+
+    get deps(): ValueNode<any>[] { return []; }
+    get triggers(): Record<NodeId, SignalNode<any>> { return []; }
+
+    constructor(action: () => void) {
+        super();
+        this.cb = action;
+    }
+
+    protected invoke(check: SequenceNumber): void {
+        if (this.visited) throw new ReentryError(ERR_LOOP);
+        if (denyCall) throw new ReentryError(ERR_CALL);
+        if (!this.dropped && check > this.checked) {
+            this.cb();
+
+            // Effect nodes updates the sequence number each time a change check is performed.
+            // Since dependencies are fixed, this will filter out unneccessary traversals.
+            this.checked = check;
+        }
+    }
+}
+
+/**
+ * The node for effect actions with fixed dependencies.
+ */
+class FixedEffectNode extends EffectNode {
     private readonly _deps: ValueNode<any>[];
     private readonly _triggers: Record<NodeId, SignalNode<any>>;
     private cb: Action;
@@ -633,18 +684,7 @@ class EffectNode extends DependentNode {
         vals(this.triggers).forEach(x => x.trigs.push(new WeakRef(this)));
     }
 
-    asEffect(): Effect & Meta<EffectNode> {
-        let f = this.act.bind(this) as Effect & Meta<EffectNode>;
-        def(f, "id", { value: this.id, writable: false });
-        def(f, "_self", { value: this, writable: false });
-        return f;
-    }
-
-    private act(): void {
-        this._act(currN());
-    }
-
-    private _act(check: SequenceNumber): void {
+    protected invoke(check: SequenceNumber): void {
         if (this.visited) throw new ReentryError(ERR_LOOP);
         if (denyCall) throw new ReentryError(ERR_CALL);
         if (!this.dropped && check > this.checked) {

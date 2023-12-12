@@ -366,6 +366,24 @@ describe("Dynamic Dependencies", () => {
         expect(d()).toBe(86);
         expect(calculated).toBe(2);
     });
+
+    test("act effect of 1 signal", () => {
+        let acted = 0;
+        const s = signal(42);
+        const e = effect(() => {
+            s();
+            acted++;
+        });
+        expect(acted).toBe(0);
+        e();
+        expect(acted).toBe(1);
+        s(43);
+        expect(acted).toBe(1);
+        e();
+        expect(acted).toBe(2);
+        e();
+        expect(acted).toBe(2);
+    });
 });
 
 describe("Permissions", () => {
