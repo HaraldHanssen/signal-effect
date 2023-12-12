@@ -275,7 +275,7 @@ export const execution = { handler: ManualExecution as ExecutionHandler };
 //#region Flags and Counters
 // Call tracking
 type CallTrackState = { deps: Node[] | undefined, nocall: boolean, nowrite: boolean };
-let track:CallTrackState = { deps: undefined, nocall: false, nowrite: false };
+let track: CallTrackState = { deps: undefined, nocall: false, nowrite: false };
 const ERR_CALL = "Calling an effect within a derived/effect callback is not allowed.";
 const ERR_WRITE = "Writing to a signal within a derived callback is not allowed";
 const ERR_LOOP = "Recursive loop detected";
@@ -417,7 +417,7 @@ abstract class DependentNode extends ComplexNode {
     }
 
     protected values(check: SequenceNumber): any[] {
-        return this.deps.map((x) => x instanceof DerivedNode ? x.value(check) : x._get())
+        return this.deps.map((x) => x instanceof DerivedNode ? x.value(check) : x.value())
     }
 
     protected extractTriggers(): Record<NodeId, SignalNode<any>> {
@@ -443,17 +443,17 @@ abstract class DependentNode extends ComplexNode {
  * @method asReadable Wrap node in a readable facade
  */
 class SignalNode<T> extends Node {
-    private value: T;
+    private _value: T;
     readonly trigs: WeakRef<DependentNode>[];
 
     constructor(value: T) {
         super(nextN());
-        this.value = value;
+        this._value = value;
         this.trigs = [];
     }
 
     asWritable(): WritableSignal<T> & Meta<SignalNode<T>> {
-        const f = this.sget.bind(this) as WritableSignal<T> & Meta<SignalNode<T>>;
+        const f = this.wfun.bind(this) as WritableSignal<T> & Meta<SignalNode<T>>;
         def(f, "id", { value: this.id, writable: false });
         def(f, "_self", { value: this, writable: false });
         def(f, "write", { value: true, writable: false });
@@ -461,26 +461,30 @@ class SignalNode<T> extends Node {
     }
 
     asReadable(): ReadableSignal<T> & Meta<ValueNode<T>> {
-        const f = this.get.bind(this) as ReadableSignal<T> & Meta<SignalNode<T>>;
+        const f = this.rfun.bind(this) as ReadableSignal<T> & Meta<SignalNode<T>>;
         def(f, "id", { value: this.id, writable: false });
         def(f, "_self", { value: this, writable: false });
         return f;
     }
 
-    private get(value?: T): T {
-        if (value) throw TypeError("Cannot modify a readonly signal");
-        track.deps?.push(this);
-        return this.value;
+    value(): T {
+        return this._value;
     }
 
-    private sget(value?: T): T | void {
+    private rfun(value?: T): T {
+        if (value) throw TypeError("Cannot modify a readonly signal");
+        track.deps?.push(this);
+        return this._value;
+    }
+
+    private wfun(value?: T): T | void {
         if (value == undefined) {
             track.deps?.push(this);
-            return this.value;
+            return this._value;
         };
         if (track.nowrite) throw new ReentryError(ERR_WRITE);
-        if (Object.is(this.value, value)) return;
-        this.value = value;
+        if (Object.is(this._value, value)) return;
+        this._value = value;
         this.current = nextN();
 
         // Notify execution handler
@@ -500,10 +504,6 @@ class SignalNode<T> extends Node {
             execution.handler.changed(this.asReadable(), deriveds, effects);
         }
     }
-
-    _get(): T {
-        return this.value;
-    }
 }
 
 /**
@@ -519,7 +519,7 @@ abstract class DerivedNode<T> extends DependentNode {
     }
 
     asDerived(): DerivedSignal<T> & Meta<DerivedNode<T>> {
-        let f = this.facade.bind(this) as DerivedSignal<T> & Meta<DerivedNode<T>>;
+        let f = this.fun.bind(this) as DerivedSignal<T> & Meta<DerivedNode<T>>;
         def(f, "id", { value: this.id, writable: false });
         def(f, "_self", { value: this, writable: false });
         return f;
@@ -540,7 +540,7 @@ abstract class DerivedNode<T> extends DependentNode {
 
     protected abstract do(check: SequenceNumber): void;
 
-    private facade(v?: T): T {
+    private fun(v?: T): T {
         if (v) throw TypeError("Cannot modify a derived signal");
         return this.value(currN());
     }
@@ -615,7 +615,7 @@ class FixedDerivedNode<T> extends DerivedNode<T> {
 abstract class EffectNode extends DependentNode {
 
     asEffect(): Effect & Meta<EffectNode> {
-        let f = this.facade.bind(this) as Effect & Meta<EffectNode>;
+        let f = this.fun.bind(this) as Effect & Meta<EffectNode>;
         def(f, "id", { value: this.id, writable: false });
         def(f, "_self", { value: this, writable: false });
         return f;
@@ -623,7 +623,7 @@ abstract class EffectNode extends DependentNode {
 
     protected abstract do(check: SequenceNumber): void;
 
-    private facade(): void {
+    private fun(): void {
         const check = currN();
         if (this.visited) throw new ReentryError(ERR_LOOP);
         if (track.nocall) throw new ReentryError(ERR_CALL);
