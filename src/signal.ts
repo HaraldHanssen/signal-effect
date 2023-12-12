@@ -520,15 +520,28 @@ abstract class DerivedNode<T> extends DependentNode {
     }
 
     asDerived(): DerivedSignal<T> & Meta<DerivedNode<T>> {
-        let f = this.calc.bind(this) as DerivedSignal<T> & Meta<DerivedNode<T>>;
+        let f = this.facade.bind(this) as DerivedSignal<T> & Meta<DerivedNode<T>>;
         def(f, "id", { value: this.id, writable: false });
         def(f, "_self", { value: this, writable: false });
         return f;
     }
 
-    abstract value(check: SequenceNumber): T;
+    value(check: SequenceNumber): T {
+        if (this.visited) throw new ReentryError(ERR_LOOP);
+        depsTrack?.push(this);
+        if (!this.dropped && check > this.checked) {
+            this.do(check);
 
-    private calc(v?: T): T {
+            // Derived nodes updates the sequence number each time a change check is performed.
+            // Since dependencies are fixed, this will filter out unneccessary traversals.
+            this.checked = check;
+        }
+        return this._value!;
+    }
+
+    protected abstract do(check: SequenceNumber): void;
+
+    private facade(v?: T): T {
         if (v) throw TypeError("Cannot modify a derived signal");
         return this.value(currN());
     }
@@ -548,17 +561,8 @@ class DynamicDerivedNode<T> extends DerivedNode<T> {
         this.cb = calculation;
     }
 
-    value(check: SequenceNumber): T {
-        if (this.visited) throw new ReentryError(ERR_LOOP);
-        depsTrack?.push(this);
-        if (!this.dropped && check > this.checked) {
-            this._value = this.cb();
-
-            // Derived nodes updates the sequence number each time a change check is performed.
-            // Since dependencies are fixed, this will filter out unneccessary traversals.
-            this.checked = check;
-        }
-        return this._value!;
+    protected do(_: SequenceNumber): void {
+        this._value = this.cb();
     }
 }
 
@@ -581,40 +585,31 @@ class FixedDerivedNode<T> extends DerivedNode<T> {
         vals(this.triggers).forEach(x => x.trigs.push(new WeakRef(this)));
     }
 
-    value(check: SequenceNumber): T {
-        if (this.visited) throw new ReentryError(ERR_LOOP);
-        depsTrack?.push(this);
-        if (!this.dropped && check > this.checked) {
-            const max = this.max();
-            if (max > this.checked) {
-                // Changes has occured in the dependencies.
-                const values = this.values(check);
+    protected do(check: SequenceNumber): void {
+        const max = this.max();
+        if (max > this.checked) {
+            // Changes has occured in the dependencies.
+            const values = this.values(check);
 
-                // Store previous state.
-                const prevDenyCall = denyCall;
-                const prevDenyWrite = denyWrite;
-                try {
-                    denyCall = true;
-                    denyWrite = true;
+            // Store previous state.
+            const prevDenyCall = denyCall;
+            const prevDenyWrite = denyWrite;
+            try {
+                denyCall = true;
+                denyWrite = true;
 
-                    // Execute callback
-                    this.visited = true;
-                    this._value = this.cb(values);
-                    this.current = max;
-                }
-                finally {
-                    // Restore previous state
-                    denyCall = prevDenyCall;
-                    denyWrite = prevDenyWrite;
-                    this.visited = false;
-                }
+                // Execute callback
+                this.visited = true;
+                this._value = this.cb(values);
+                this.current = max;
             }
-
-            // Derived nodes updates the sequence number each time a change check is performed.
-            // Since dependencies are fixed, this will filter out unneccessary traversals.
-            this.checked = check;
+            finally {
+                // Restore previous state
+                denyCall = prevDenyCall;
+                denyWrite = prevDenyWrite;
+                this.visited = false;
+            }
         }
-        return this._value!;
     }
 }
 
@@ -625,16 +620,25 @@ class FixedDerivedNode<T> extends DerivedNode<T> {
 abstract class EffectNode extends DependentNode {
 
     asEffect(): Effect & Meta<EffectNode> {
-        let f = this.act.bind(this) as Effect & Meta<EffectNode>;
+        let f = this.facade.bind(this) as Effect & Meta<EffectNode>;
         def(f, "id", { value: this.id, writable: false });
         def(f, "_self", { value: this, writable: false });
         return f;
     }
 
-    protected abstract invoke(check: SequenceNumber): void;
+    protected abstract do(check: SequenceNumber): void;
 
-    private act(): void {
-        this.invoke(currN());
+    private facade(): void {
+        const check = currN();
+        if (this.visited) throw new ReentryError(ERR_LOOP);
+        if (denyCall) throw new ReentryError(ERR_CALL);
+        if (!this.dropped && check > this.checked) {
+            this.do(check);
+
+            // Effect nodes updates the sequence number each time a change check is performed.
+            // Since dependencies are fixed, this will filter out unneccessary traversals.
+            this.checked = check;
+        }
     }
 }
 
@@ -652,16 +656,8 @@ class DynamicEffectNode extends EffectNode {
         this.cb = action;
     }
 
-    protected invoke(check: SequenceNumber): void {
-        if (this.visited) throw new ReentryError(ERR_LOOP);
-        if (denyCall) throw new ReentryError(ERR_CALL);
-        if (!this.dropped && check > this.checked) {
-            this.cb();
-
-            // Effect nodes updates the sequence number each time a change check is performed.
-            // Since dependencies are fixed, this will filter out unneccessary traversals.
-            this.checked = check;
-        }
+    protected do(_: SequenceNumber): void {
+        this.cb();
     }
 }
 
@@ -684,38 +680,30 @@ class FixedEffectNode extends EffectNode {
         vals(this.triggers).forEach(x => x.trigs.push(new WeakRef(this)));
     }
 
-    protected invoke(check: SequenceNumber): void {
-        if (this.visited) throw new ReentryError(ERR_LOOP);
-        if (denyCall) throw new ReentryError(ERR_CALL);
-        if (!this.dropped && check > this.checked) {
-            const max = this.max();
-            if (max > this.checked) {
-                // Changes has occured in the dependencies.
-                const values = this.values(check);
+    protected do(check: SequenceNumber): void {
+        const max = this.max();
+        if (max > this.checked) {
+            // Changes has occured in the dependencies.
+            const values = this.values(check);
 
-                // Store previous state.
-                const prevDenyCall = denyCall;
-                const prevDenyWrite = denyWrite;
-                try {
-                    denyCall = true;
-                    denyWrite = false;
+            // Store previous state.
+            const prevDenyCall = denyCall;
+            const prevDenyWrite = denyWrite;
+            try {
+                denyCall = true;
+                denyWrite = false;
 
-                    // Execute callback
-                    this.visited = true;
-                    this.cb(values);
-                    this.current = max;
-                }
-                finally {
-                    // Restore previous state
-                    denyCall = prevDenyCall;
-                    denyWrite = prevDenyWrite;
-                    this.visited = false;
-                }
+                // Execute callback
+                this.visited = true;
+                this.cb(values);
+                this.current = max;
             }
-
-            // Effect nodes updates the sequence number each time a change check is performed.
-            // Since dependencies are fixed, this will filter out unneccessary traversals.
-            this.checked = check;
+            finally {
+                // Restore previous state
+                denyCall = prevDenyCall;
+                denyWrite = prevDenyWrite;
+                this.visited = false;
+            }
         }
     }
 }
