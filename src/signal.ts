@@ -97,7 +97,7 @@ export class SignalError extends Error {
 }
 
 /**
- * Thrown if user is trying to reenter a get or set method of a signal within an effect or derived function.
+ * Thrown if callback is trying to reenter a get or set method of a signal within an effect or derived function.
  * All dependent values must be provided upon declaration.
  */
 export class ReentryError extends SignalError {
@@ -174,6 +174,11 @@ export function derived(...args: any[]): any {
     execution.handler.changed(undefined, [d], undefined);
     return d;
 }
+
+/**
+ * Alias for {@link derived}
+ */
+export const computed = derived;
 
 /** 
  * Create an effect/action from one or more sources.

@@ -637,6 +637,42 @@ describe("Examples", () => {
         expect(result).toBe(42);
         expect(acted).toBe(2);
     });
+    test("example use immediate execution handler", () => {
+        withHandler(ImmediateExecution, () => {
+            let acted = 0;
+            let result = 0;
+            const a = signal(1);
+            const b = signal(2);
+            const c = derived(a, b, (x, y) => 2 * x + y);
+            effect(c, (x) => {
+                acted++;
+                result = x;
+            });
+            expect(result).toBe(4);
+            a(20);
+            expect(result).toBe(42);
+        });
+    });
+    test("example use delayed execution handler", () => {
+        withHandler(DelayedExecution, () => {
+            let acted = 0;
+            let result = 0;
+            const a = signal(1);
+            const b = signal(2);
+            const c = derived(a, b, (x, y) => 2 * x + y);
+            effect(c, (x) => {
+                acted++;
+                result = x;
+            });
+            expect(result).toBe(0);
+            update();
+            expect(result).toBe(4);
+            a(20);
+            expect(result).toBe(4);
+            update();
+            expect(result).toBe(42);
+        });
+    });
 });
 
 describe("Internals", () => {
@@ -686,8 +722,8 @@ describe("Internals", () => {
 });
 
 describe("Performance", () => {
-    // From https://github.com/maverick-js/signals/blob/main/bench/layers.js
-    const SOLUTIONS = {
+     // Based on https://github.com/maverick-js/signals/blob/main/bench/layers.js
+     const SOLUTIONS = {
         10: [2, 4, -2, -3],
         100: [-2, -4, 2, 3],
         500: [-2, 1, -4, -4],
@@ -699,7 +735,7 @@ describe("Performance", () => {
     const ITERS = 2;
 
     function run(layers: number, handler: DelayedExecutionHandler | undefined = undefined): number {
-        const start = {
+     const start = {
             a: signal(1),
             b: signal(2),
             c: signal(3),

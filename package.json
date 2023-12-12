@@ -1,6 +1,6 @@
 {
-  "name": "signal-ts",
-  "version": "0.0.1",
+  "name": "signal-effect",
+  "version": "0.1.1",
   "type": "module",
   "description": "Reactive signals without any framework",
   "author": "Harald Hanssen",
@@ -8,16 +8,19 @@
   "homepage": "https:://to.be/",
   "repository": {
     "type": "git",
-    "url": "https://github.com/hhan71/signal-ts.git"
+    "url": "https://github.com/tobe/signal-effect.git"
   },
   "bugs": {
-    "url": "https://github.com/hhan71/signal-ts/issues"
+    "url": "https://github.com/tobe/signal-effect/issues"
   },
   "keywords": [
     "signal",
     "derived",
+    "compute",
     "effect",
+    "react",
     "reactive",
+    "recalc",
     "general"
   ],
   "main": "./dist/signal.umd.cjs",

@@ -1,4 +1,4 @@
-# signal
+# signal-effect
 Reactive signal library without any dependencies.
 
 ## The signal library contains three types of primitives:
@@ -7,9 +7,9 @@ Reactive signal library without any dependencies.
 
     Contains the source values that can be modified.
 
-2. ```derived```
+2. ```derived``` / ```computed```
 
-    Uses one or more ```signal``` and/or ```derived``` values to calculate a derived value.
+    Uses one or more ```signal``` and/or ```derived``` values to calculate a new ```derived``` value.
 
 3. ```effect```
 
@@ -32,25 +32,25 @@ Reactive signal library without any dependencies.
 
 - **GC Friendly**
 
-    The library _does not_ store any of the primitives in global bookkeeping structures. Remove your reference to a primitive and it will (eventually) be collected.
+    The library _does not_ store any of the primitives in a global bookkeeping structure. Remove your reference to a primitive and it will (eventually) be collected.
     
     Remember though, dependency references in ```derived``` and ```effect``` still apply. The top nodes need to be unreferenced for the underlying structure to be collected.
     
     GC is unpredictable. With execution strategies other than the default **Manual**, it is necessary to _drop_ the primitives first to prevent unintended execution.
 
 
-## And different execution strategies (handlers):
+## And several execution handlers:
 - **Manual**
 
-    (default) Will not execute ```derived```s and ```effect```s when ```signal```s change, user must manually invoke the provided update method or call them directly.
+    (default) Will not execute ```derived```s and ```effect```s when ```signal```s change. Either call each primitive directly or use the _update_ method on an array of them.
 
 - **Immediate**
 
-    Will execute dependent ```derived```s and ```effect```s when a signal is set.
+    Will execute dependent ```derived```s and ```effect```s immediately when a signal is set.
 
 - **Delayed**
 
-    Gathers all affected ```derived```s and ```effect```s when signals change and executes them when the update method is called.
+    Gathers all affected ```derived```s and ```effect```s when ```signal```s change. Execute them at a convenient time when the _update_ method is called.
 
 - **Custom**
 
@@ -141,9 +141,9 @@ const a = signal(1);
 const b = signal(2);
 const c = derived(a, b, (x, y) => 2 * x + y);
 effect(c, (x) => console.log(x));
-handler.update(); // outputs '4'
+update(); // outputs '4'
 a(20);
-handler.update(); // outputs '42'
+update(); // outputs '42'
 ```
 
 ## Performance
@@ -160,8 +160,8 @@ Node v20.10.0 on Mac Air M1
 
 
 ## TODOs
-- [ ] Automatic dependency discovery for deriveds and effects.
-- [ ] Scoped execution handling.
+- [ ] Automatic dependency discovery for deriveds and effects. Just provide the callback and the rest is figured out.
+- [ ] Scoped execution handlers.  
 - [ ] Scoped create and drop. Track creation of primitives and drop them together.
 - [ ] Allow internal modification of objects and arrays without set. Avoids the need to reconstruct the entire object/array.
 - [x] Explicit removal of effects and deriveds (drop). Useful in Immediate/Delayed execution.
@@ -172,6 +172,6 @@ Node v20.10.0 on Mac Air M1
 - ...
 
 
-## Disclaimer
-This library was created just for the fun of it. I was curious of the "sudden leap" to a signal system in Svelte and Angular, and wanted to see how such a system could be constructed. This library is tested to the extent of the current unit tests. It might be useful in some settings or maybe as an inspiration. Try it out if you like.
+## About
+Yet another signal library?! This library was created just for the fun of it. I was curious of the "sudden leap" to a signal system in Svelte and Angular, and wanted to see how such a system could be constructed. The big frameworks provide their own signalling. Use them. In other settings this library might be a useful replacement. Try it out if you like.
 
