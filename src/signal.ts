@@ -70,9 +70,9 @@ export interface Effect {
  **/
 export interface ExecutionHandler {
     /** 
-     * Called each time a writable signal has changed, or when a derived or effect is added.
+     * Called each time a signal has changed, or when a derived or effect is added.
     */
-    changed(changed: ReadableSignal<any> | undefined, deriveds: DerivedSignal<any>[] | undefined, effects: Effect[] | undefined): void;
+    changed(changed: ReadableSignal<any> | DerivedSignal<any> | undefined, deriveds: DerivedSignal<any>[] | undefined, effects: Effect[] | undefined): void;
 }
 
 /** The delayed execution handler stores the affected deriveds and effects and executes them when {@link update} is called. */
@@ -303,13 +303,7 @@ const def = Object.defineProperty;
 //#region Execution Handlers
 function createManualExecutionHandler(): ManualExecutionHandler {
     function update(items: DerivedSignal<any>[] | Effect[]) {
-        type UpdateNode = Meta<DependentNode> & (() => unknown);
-
-        // Precheck the items before they are executed 
-        const current = currN();
-        (items as UpdateNode[])
-            .filter(x => x._self.precheck(current))
-            .forEach(x => x());
+        for (const x of items) x();
     }
 
     return { changed: () => { }, update };
@@ -317,8 +311,8 @@ function createManualExecutionHandler(): ManualExecutionHandler {
 
 function createImmediateExecutionHandler(): ExecutionHandler {
     function changed(_: ReadableSignal<any> | undefined, deriveds: DerivedSignal<any>[] | undefined, effects: Effect[] | undefined) {
-        deriveds?.forEach(x => x());
-        effects?.forEach(x => x());
+        if (deriveds) for (const x of deriveds) x();
+        if (effects) for (const x of effects) x();
     }
     return { changed };
 }
@@ -327,14 +321,14 @@ function createDelayedExecutionHandler(): DelayedExecutionHandler {
     let d: Record<NodeId, DerivedSignal<any>> = {};
     let e: Record<NodeId, Effect> = {};
     function changed(_: ReadableSignal<any> | undefined, deriveds: DerivedSignal<any>[] | undefined, effects: Effect[] | undefined) {
-        deriveds?.forEach(x => d[x.id] = x);
-        effects?.forEach(x => e[x.id] = x);
+        if (deriveds) for (const x of deriveds) d[x.id] = x;
+        if (effects) for (const x of effects) e[x.id] = x;
     }
     function update(): [DerivedSignal<any>[], Effect[]] {
         const deriveds = Object.values(d);
         const effects = Object.values(e);
-        deriveds.forEach(x => x());
-        effects.forEach(x => x());
+        for (const x of deriveds) x();
+        for (const x of effects) x();
         d = {};
         e = {};
         return [deriveds, effects];
@@ -348,10 +342,15 @@ function createDelayedExecutionHandler(): DelayedExecutionHandler {
  * Base node for all.
  * @prop {} id Unique node id used for matching and lookup
  * @prop {} current The sequence number representing the current value or effect. 
+ * @method link Called by dependent nodes to register itself from execution handling on this node.
+ * @method unlink Called by dependent nodes to unregister itself from execution handling on this node.
+ * @method notify Called by signal and derived nodes to notify execution handler.
  */
 abstract class Node {
     readonly id: NodeId;
     private _current: SequenceNumber;
+    protected _in = new Map<NodeId, ValueNode<any>>();
+    protected _out = new Map<NodeId, WeakRef<DependentNode>>();
 
     get current() { return this._current; }
     protected set current(v: SequenceNumber) { this._current = v };
@@ -360,6 +359,60 @@ abstract class Node {
         this.id = nextId();
         this._current = current;
     }
+
+    notify(current: SequenceNumber) {
+        // Notify execution handler
+        const manual = execution.handler === ManualExecution;
+        const deriveds = [] as DerivedSignal<any>[];
+        const effects = [] as Effect[];
+        
+        const visited = new Set<DerivedNode<any>>();
+        const traverse = [this] as Node[];
+        while (traverse.length > 0) {
+            const source = traverse.pop()!;
+            for (const [k, v] of source._out) {
+                let d = v.deref();
+                if (!d || d.dropped) {
+                    source._out.delete(k);
+                    continue;
+                }
+                if (d instanceof DerivedNode) {
+                    if (visited.has(d)) {
+                        // been here before, ignore.
+                        continue;
+                    }
+                    visited.add(d);
+                    traverse.push(d);
+                }
+                d.dirty(current)
+                if (manual) continue;
+                if (d instanceof DerivedNode) {
+                    deriveds.push(d.asDerived())
+                }
+                if (d instanceof EffectNode) {
+                    effects.push(d.asEffect());
+                }
+            }
+        }
+        if (!manual) {
+            if (this instanceof SignalNode) {
+                execution.handler.changed(this.asReadable(), deriveds, effects);
+            }
+            else if (this instanceof DerivedNode) {
+                execution.handler.changed(this.asDerived(), deriveds, effects);
+            }
+        }
+    }
+
+    static link(source: ValueNode<any>, target: DependentNode) {
+        target._in.set(source.id, source);
+        (source as Node)._out.set(target.id, new WeakRef(target));
+    }
+
+    static unlink(source: ValueNode<any>, target: DependentNode) {
+        target._in.delete(source.id);
+        (source as Node)._out.delete(target.id);
+    }
 }
 
 /**
@@ -367,12 +420,9 @@ abstract class Node {
  * @method asWritable Wrap node in a writable facade.
  * @method asReadable Wrap node in a readable facade
  * @method value The current value of the given type.
- * @method register Called by dependent nodes to register itself from execution handling on this node.
- * @method unregister Called by dependent nodes to unregister itself from execution handling on this node.
  */
 class SignalNode<T> extends Node {
     private _value: T;
-    private _trigs = new Map<NodeId, WeakRef<DependentNode>>();
 
     constructor(value: T) {
         super(nextN());
@@ -398,14 +448,6 @@ class SignalNode<T> extends Node {
         return this._value;
     }
 
-    register(dep: DependentNode) {
-        this._trigs.set(dep.id, new WeakRef(dep));
-    }
-
-    unregister(dep: DependentNode) {
-        this._trigs.delete(dep.id);
-    }
-
     private rfun(value?: T): T {
         if (value) throw TypeError("Cannot modify a readonly signal");
         track.deps?.push(this);
@@ -421,53 +463,26 @@ class SignalNode<T> extends Node {
         if (Object.is(this._value, value)) return;
         this._value = value;
         this.current = nextN();
-
-        // Notify execution handler
-        const manual = execution.handler === ManualExecution;
-        const deriveds = [] as DerivedSignal<any>[];
-        const effects = [] as Effect[];
-        for (const [k, v] of this._trigs) {
-            let d = v.deref();
-            if (!d || d.dropped) {
-                this._trigs.delete(k);
-                continue;
-            }
-            d.dirty = true;
-            if (manual) continue;
-            if (d instanceof DerivedNode) {
-                deriveds.push(d.asDerived())
-            }
-            if (d instanceof EffectNode) {
-                effects.push(d.asEffect());
-            }
-        }
-        if (!manual) {
-            execution.handler.changed(this.asReadable(), deriveds, effects);
-        }
+        this.notify(this.current);
     }
 }
 
 /**
  * Base node for those that depend on others.
- * @prop {} dirty Flag set by signal node to notify reexecution.
  * @prop {} checked The sequence number when it was last checked against dependencies.
  * @prop {} visited The visited flag is used for loop detection.
  * @prop {} dropped True if the node is dropped from execution.
  * @prop {} deps The value dependencies this node directly depends on.
  * @prop {} triggers The writable dependencies that will trigger reevaluation. Derived calculations are filtered out.
- * @method precheck Check need for reexecution on this node.
+ * @method dirty Initiated by signal node to notify reexecution.
  * @method drop Drops the node from further execution.
  */
 abstract class DependentNode extends Node {
-    dirty: boolean = true;
+    protected _dirty: boolean = true;
     protected checked: SequenceNumber;
     protected visited: boolean = false;
     private _dropped: boolean = false;
-    private _deps: ValueNode<any>[] = [];
-    private _triggers = new Map<NodeId, SignalNode<any>>()
 
-    get deps(): ValueNode<any>[] { return this._deps; }
-    get triggers(): Map<NodeId, SignalNode<any>> { return this._triggers; }
     get dropped() { return this._dropped; }
 
     constructor() {
@@ -475,47 +490,24 @@ abstract class DependentNode extends Node {
         this.checked = MIN_SEQ;
     }
 
-    precheck(current: SequenceNumber): boolean {
-        if (this.dirty) return true;
-        if (current > this.checked) {
-            for (const t of this.triggers.values()) {
-                if (t.current > this.checked) {
-                    return true;
-                }
-            }
-            this.checked = current;
-        }
-        return false;
+    dirty(current: SequenceNumber): boolean {
+        this._dirty = current > this.current;
+        return this._dirty;
     }
 
     drop() {
         this._dropped = true;
     }
 
-    protected values(check: SequenceNumber): any[] {
-        return this.deps.map((x) => x instanceof DerivedNode ? x.value(check) : x.value())
-    }
-
     protected update(deps: ValueNode<any>[], current: boolean = true) {
-        this._deps = deps;
-        for (const remove of this._triggers.values()) {
-            remove.unregister(this);
+        for (const dep of this._in.values()) { 
+            Node.unlink(dep, this);
         }
-        this._triggers = new Map<NodeId, SignalNode<any>>();
-        for (const dep of deps) {
-            if (dep instanceof DependentNode) {
-                for (const trigger of dep._triggers.values()) {
-                    this._triggers.set(trigger.id, trigger);
-                }
-            }
-            else if (dep instanceof SignalNode) {
-                this._triggers.set(dep.id, dep);
-            }
+        for (const dep of deps) { 
+            Node.link(dep, this);
+            if (current && dep.current > this.current) this.current = dep.current;
         }
-        for (const add of this._triggers.values()) {
-            add.register(this);
-            if (current && add.current > this.current) this.current = add.current;
-        }
+        this.notify(this.current);
     }
 }
 
@@ -542,9 +534,9 @@ abstract class DerivedNode<T> extends DependentNode {
         if (this.visited) throw new ReentryError(ERR_LOOP);
         track.deps?.push(this);
         if (!this.dropped && check > this.checked) {
-            if (this.dirty) {
+            if (this._dirty) {
                 this.do(check);
-                this.dirty = false;
+                this._dirty = false;
             }
 
             this.checked = check;
@@ -594,17 +586,19 @@ class DynamicDerivedNode<T> extends DerivedNode<T> {
  * The node for derived signals with fixed dependencies.    
  */
 class FixedDerivedNode<T> extends DerivedNode<T> {
+    private vo: NodeId[];
     private cb: Calculation<T>;
 
     constructor(dependencies: ValueNode<any>[], calculation: Calculation<T>) {
         super();
+        this.vo = dependencies.map(x => x.id);
         this.cb = calculation;
         this.update(dependencies, false);
     }
 
     protected do(check: SequenceNumber): void {
         // Changes has occured in the dependencies.
-        const values = this.values(check);
+        const values = this.vo.map(x => this._in.get(x)?.value(check));
 
         // Store previous state.
         const prev = track;
@@ -613,7 +607,6 @@ class FixedDerivedNode<T> extends DerivedNode<T> {
             track = { deps: undefined, nocall: true, nowrite: true };
             this.visited = true;
             this._value = this.cb(values);
-            this.update(this.deps);
         }
         finally {
             // Restore previous state
@@ -643,9 +636,9 @@ abstract class EffectNode extends DependentNode {
         if (this.visited) throw new ReentryError(ERR_LOOP);
         if (track.nocall) throw new ReentryError(ERR_CALL);
         if (!this.dropped && check > this.checked) {
-            if (this.dirty) {
+            if (this._dirty) {
                 this.do(check);
-                this.dirty = false;
+                this._dirty = false;
             }
 
             this.checked = check;
@@ -687,17 +680,19 @@ class DynamicEffectNode extends EffectNode {
  * The node for effect actions with fixed dependencies.
  */
 class FixedEffectNode extends EffectNode {
+    private vo: NodeId[];
     private cb: Action;
 
     constructor(dependencies: ValueNode<any>[], action: Action) {
         super();
+        this.vo = dependencies.map(x => x.id);
         this.cb = action;
         this.update(dependencies, false);
     }
 
     protected do(check: SequenceNumber): void {
         // Changes has occured in the dependencies.
-        const values = this.values(check);
+        const values = this.vo.map(x => this._in.get(x)?.value(check));
 
         // Store previous state.
         const prev = track;
@@ -706,7 +701,6 @@ class FixedEffectNode extends EffectNode {
             track = { deps: undefined, nocall: true, nowrite: false };
             this.visited = true;
             this.cb(values);
-            this.update(this.deps);
         }
         finally {
             // Restore previous state

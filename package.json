@@ -1,6 +1,6 @@
 {
   "name": "signal-effect",
-  "version": "0.1.1",
+  "version": "0.2.1",
   "type": "module",
   "description": "Reactive signals without any framework",
   "author": "Harald Hanssen",
