@@ -422,7 +422,7 @@ describe("Permissions", () => {
     test("deny reentry looping in derived", () => {
         const s = signal(42);
         const justCalc = derived(s, (x) => x);
-        const enterLoop:DerivedSignal<number> = derived(s, (x) => x + enterLoop() + justCalc());
+        const enterLoop: DerivedSignal<number> = derived(s, (x) => x + enterLoop() + justCalc());
 
         for (let i = 42; i < 45; i++) {
             s(i);
@@ -752,20 +752,20 @@ describe("Internals", () => {
 });
 
 describe("Performance", () => {
-     // Based on https://github.com/maverick-js/signals/blob/main/bench/layers.js
-     const SOLUTIONS = {
+    // Based on https://github.com/maverick-js/signals/blob/main/bench/layers.js
+    const SOLUTIONS = {
         10: [2, 4, -2, -3],
         100: [-2, -4, 2, 3],
-        500: [-2, 1, -4, -4],
-        1000: [-2, -4, 2, 3],
+        //500: [-2, 1, -4, -4],
+        //1000: [-2, -4, 2, 3],
         // 2000: [-2, 1, -4, -4],
         // 2500: [-2, -4, 2, 3],
-        5000: [-2, 1, -4, -4],
+        //5000: [-2, 1, -4, -4],
     } as Record<number, number[]>;
     const ITERS = 2;
 
-    function run(layers: number, handler: DelayedExecutionHandler | undefined = undefined): number {
-     const start = {
+    function run(layers: number, dynamic: boolean, handler: DelayedExecutionHandler | undefined = undefined): number {
+        const start = {
             a: signal(1),
             b: signal(2),
             c: signal(3),
@@ -780,12 +780,21 @@ describe("Performance", () => {
         };
 
         for (let i = layers; i--;) {
-            layer = ((m) => {
+            layer = ((x) => {
+                const m = x;
+                if (dynamic) {
+                    return {
+                        a: derived(() => m.b()),
+                        b: derived(() => m.a() - m.c()),
+                        c: derived(() => m.b() + m.d()),
+                        d: derived(() => m.c())
+                    };
+                }
                 return {
                     a: derived(m.b, (b) => b),
                     b: derived(m.a, m.c, (a, c) => a - c),
                     c: derived(m.b, m.d, (b, d) => b + d),
-                    d: derived(m.c, (c) => c),
+                    d: derived(m.c, (c) => c)
                 };
             })(layer);
         }
@@ -819,58 +828,64 @@ describe("Performance", () => {
 
     const perf: Performance = { iterations: ITERS, result: {} };
     const layers = Object.keys(SOLUTIONS);
+    const dynamics = [false, true];
 
-    layers.forEach(layer => {
-        const name = "manual";
-        perf.result[name] = {};
-        const title = `${name} ${layer} layers`;
-        test(title, () => {
-            const time = average(() => run(Number(layer)));
-            perf.result[name][layer] = time;
-        });
-    });
+    dynamics.forEach(dynamic => {
+        const pf = + dynamic ? " (d)" : " (f)";
 
-    layers.forEach(layer => {
-        const name = "immediate";
-        perf.result[name] = {};
-        const title = `${name} ${layer} layers`;
-        test(title, () => {
-            withHandler(ImmediateExecution, () => {
-                const time = average(() => run(Number(layer)));
+        layers.forEach(layer => {
+            const name = "manual" + pf;
+            perf.result[name] = {};
+            const title = `${name} ${layer} layers`;
+            test(title, () => {
+                const time = average(() => run(Number(layer), dynamic));
                 perf.result[name][layer] = time;
             });
         });
-    });
 
-    layers.forEach(layer => {
-        const name = "delayed";
-        perf.result[name] = {};
-        const title = `${name} ${layer} layers`;
-        test(title, () => {
-            const handler = DelayedExecution;
-            withHandler(handler, () => {
-                const time = average(() => run(Number(layer), handler));
-                perf.result[name][layer] = time;
+        layers.forEach(layer => {
+            const name = "immediate" + pf;
+            perf.result[name] = {};
+            const title = `${name} ${layer} layers`;
+            test(title, () => {
+                withHandler(ImmediateExecution, () => {
+                    const time = average(() => run(Number(layer), dynamic));
+                    perf.result[name][layer] = time;
+                });
+            });
+        });
+
+        layers.forEach(layer => {
+            const name = "delayed" + pf;
+            perf.result[name] = {};
+            const title = `${name} ${layer} layers`;
+            test(title, () => {
+                const handler = DelayedExecution;
+                withHandler(handler, () => {
+                    const time = average(() => run(Number(layer), dynamic, handler));
+                    perf.result[name][layer] = time;
+                });
             });
         });
     });
 
     test("log result", () => {
+        const fcol = " ".repeat(15);
         const col = " ".repeat(10);
         console.log(`Average of ${perf.iterations} iterations. Results in milliseconds.`);
-        let header = "| " + ("h\\l" + col).slice(0, col.length) + " |";
+        let header = "| " + ("handler\\layers" + fcol).slice(0, fcol.length) + " |";
         layers.forEach(x => {
             header += (" " + x + col).slice(0, col.length) + " |";
         });
         console.log(header);
-        let sep = "| " + "-".repeat(col.length) + " |";
+        let sep = "| " + "-".repeat(fcol.length) + " |";
         layers.forEach(() => {
             sep += " " + "-".repeat(col.length - 1) + ":|";
         });
         console.log(sep);
         Object.entries(perf.result).forEach((r) => {
             const results = layers.map(layer => r[1][layer]);
-            let output = "| " + (r[0] + col).slice(0, col.length) + " |";
+            let output = "| " + (r[0] + fcol).slice(0, fcol.length) + " |";
             results.forEach(x => {
                 output += (col + x.toFixed(2)).slice(-col.length) + " |";
             });

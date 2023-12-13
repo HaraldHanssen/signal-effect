@@ -310,9 +310,26 @@ function createManualExecutionHandler(): ManualExecutionHandler {
 }
 
 function createImmediateExecutionHandler(): ExecutionHandler {
+    //Implemented as a queue to guard against recursive effects.
+    let head = 0;
+    let tail = 0;
+    let queue = [] as [DerivedSignal<any>[] | undefined, Effect[] | undefined][];
     function changed(_: ReadableSignal<any> | undefined, deriveds: DerivedSignal<any>[] | undefined, effects: Effect[] | undefined) {
-        if (deriveds) for (const x of deriveds) x();
-        if (effects) for (const x of effects) x();
+        queue.push([deriveds, effects]);
+        tail++;
+
+        // If in progress earlier in the call stact, just return
+        if (tail - head > 1) return;
+
+        while (tail > head) {
+            const [d, e] = queue[head];
+            if (d) for (const x of d) x();
+            if (e) for (const x of e) x();
+            head++;
+        }
+        queue.length = 0;
+        head = 0;
+        tail = 0;
     }
     return { changed };
 }
@@ -349,8 +366,8 @@ function createDelayedExecutionHandler(): DelayedExecutionHandler {
 abstract class Node {
     readonly id: NodeId;
     private _current: SequenceNumber;
-    protected _in?:Map<NodeId, ValueNode<any>> = undefined;
-    protected _out?:Map<NodeId, WeakRef<DependentNode>> = undefined;
+    protected _in?: Map<NodeId, ValueNode<any>> = undefined;
+    protected _out?: Map<NodeId, WeakRef<DependentNode>> = undefined;
 
     get current() { return this._current; }
     protected set current(v: SequenceNumber) { this._current = v };
@@ -500,16 +517,29 @@ abstract class DependentNode extends Node {
         this._dropped = true;
     }
 
-    protected update(deps: ValueNode<any>[], dynamic: boolean = true) {
-        for (const dep of this._in!.values()) {
-            Node.unlink(dep, this);
-        }
+    protected init(deps: ValueNode<any>[]) {
         for (const dep of deps) {
             Node.link(dep, this);
-            if (dynamic && dep.current > this.current) this.current = dep.current;
         }
-        
-        if (dynamic) {
+    }
+
+    protected update(deps: ValueNode<any>[], relink: boolean, notify: boolean) {
+        if (relink) {
+            for (const dep of this._in!.values()) {
+                Node.unlink(dep, this);
+            }
+            for (const dep of deps) {
+                Node.link(dep, this);
+                if (dep.current > this.current) this.current = dep.current;
+            }
+        } else {
+            for (const dep of deps) {
+                Node.link(dep, this);
+                if (dep.current > this.current) this.current = dep.current;
+            }
+        }
+
+        if (notify) {
             this.notify(this.current);
         }
     }
@@ -570,21 +600,19 @@ class DynamicDerivedNode<T> extends DerivedNode<T> {
     }
 
     protected do(_: SequenceNumber): void {
-        // Store previous state.
+        const deps = [] as ValueNode<any>[];
+        const val = this._value;
         const prev = track;
         try {
-            // Execute callback
-            const deps = [] as ValueNode<any>[];
             track = { deps, nocall: true, nowrite: true };
             this.visited = true;
             this._value = this.cb();
-            this.update(deps, true);
         }
         finally {
-            // Restore previous state
-            track = prev;
             this.visited = false;
+            track = prev;
         }
+        this.update(deps, true, !Object.is(val, this.value));
     }
 }
 
@@ -592,33 +620,30 @@ class DynamicDerivedNode<T> extends DerivedNode<T> {
  * The node for derived signals with fixed dependencies.    
  */
 class FixedDerivedNode<T> extends DerivedNode<T> {
-    private vo: NodeId[];
+    private deps: ValueNode<any>[];
     private cb: Calculation<T>;
 
     constructor(dependencies: ValueNode<any>[], calculation: Calculation<T>) {
         super();
-        this.vo = dependencies.map(x => x.id);
+        this.deps = dependencies;
         this.cb = calculation;
-        this.update(dependencies, false);
+        this.init(dependencies);
     }
 
     protected do(check: SequenceNumber): void {
-        // Changes has occured in the dependencies.
-        const values = this.vo.map(x => this._in!.get(x)?.value(check));
-
-        // Store previous state.
+        const values = this.deps.map(x => x.value(check));
+        const val = this._value;
         const prev = track;
         try {
-            // Execute callback
             track = { deps: undefined, nocall: true, nowrite: true };
             this.visited = true;
             this._value = this.cb(values);
         }
         finally {
-            // Restore previous state
-            track = prev;
             this.visited = false;
+            track = prev;
         }
+        this.update(this.deps, false, !Object.is(val, this.value));
     }
 }
 
@@ -668,21 +693,18 @@ class DynamicEffectNode extends EffectNode {
     }
 
     protected do(_: SequenceNumber): void {
-        // Store previous state.
+        const deps = [] as ValueNode<any>[];
         const prev = track;
         try {
-            // Execute callback
-            const deps = [] as ValueNode<any>[];
             track = { deps, nocall: true, nowrite: false };
             this.visited = true;
             this.cb();
-            this.update(deps, true);
         }
         finally {
-            // Restore previous state
             track = prev;
             this.visited = false;
         }
+        this.update(deps, true, false);
     }
 }
 
@@ -690,33 +712,29 @@ class DynamicEffectNode extends EffectNode {
  * The node for effect actions with fixed dependencies.
  */
 class FixedEffectNode extends EffectNode {
-    private vo: NodeId[];
+    private deps: ValueNode<any>[];
     private cb: Action;
 
     constructor(dependencies: ValueNode<any>[], action: Action) {
         super();
-        this.vo = dependencies.map(x => x.id);
+        this.deps = dependencies;
         this.cb = action;
-        this.update(dependencies, false);
+        this.init(dependencies);
     }
 
     protected do(check: SequenceNumber): void {
-        // Changes has occured in the dependencies.
-        const values = this.vo.map(x => this._in!.get(x)?.value(check));
-
-        // Store previous state.
+        const values = this.deps.map(x => x.value(check));
         const prev = track;
         try {
-            // Execute callback
             track = { deps: undefined, nocall: true, nowrite: false };
             this.visited = true;
             this.cb(values);
         }
         finally {
-            // Restore previous state
             track = prev;
             this.visited = false;
         }
+        this.update(this.deps, false, false);
     }
 }
 
