@@ -2,7 +2,7 @@
  * @license MIT
  * Copyright (c) 2023 Harald Hanssen
  */
-import { ReentryError, propup, derived, effect, readonly, signal, signals, update, SignalError, ExecutionHandler, execution, ImmediateExecution, _private, DelayedExecution, drop, ReadableSignal, DelayedExecutionHandler, DerivedSignal } from "./signal";
+import { ReentryError, propup, derived, effect, readonly, signal, signals, update, SignalError, ExecutionHandler, execution, ImmediateExecution, DelayedExecution, drop, ReadableSignal, DelayedExecutionHandler, DerivedSignal } from "./signal";
 
 const jestConsole = console;
 
@@ -739,48 +739,15 @@ describe("Examples", () => {
 });
 
 describe("Internals", () => {
-    test("deref function removes dead references", () => {
-        class Weak {
-            v: number;
-            deref: () => number | undefined;
-            constructor(v: number) {
-                this.v = v;
-                this.deref = () => (v % 2) > 0 ? v : undefined;
-            }
+    test("Can delete within for of loop", () => {
+        const map = new Map<number, any>();
+        for (let i = 0; i < 5; i++) {
+            map.set(i, {});
         }
-
-        const empty = [] as Weak[];
-        _private.deref(empty, () => { throw Error("called"); });
-        expect(empty.length).toBe(0);
-
-        const one_dead = [new Weak(2)];
-        _private.deref(one_dead, () => { throw Error("called"); });
-        expect(one_dead.length).toBe(0);
-
-        const one_live = [new Weak(1)];
-        const one_live_result = [] as number[];
-        _private.deref(one_live, (x) => { one_live_result.push(x); });
-        expect(one_live.map(x => x.v)).toEqual([1]);
-        expect(one_live_result).toEqual([1]);
-
-        const two = [new Weak(1), new Weak(2)];
-        const two_result = [] as number[];
-        _private.deref(two, (x) => { two_result.push(x); });
-        expect(two.map(x => x.v)).toEqual([1]);
-        expect(two_result).toEqual([1]);
-
-        const three = [new Weak(1), new Weak(2), new Weak(3)];
-        const three_result = [] as number[];
-        _private.deref(three, (x) => { three_result.push(x); });
-        expect(three.map(x => x.v)).toEqual([1, 3]);
-        expect(three_result).toEqual([1, 3]);
-
-        // Order is not important
-        const ten = [...Array(10).keys()].map(x => new Weak(x + 1)); // 1 .. 10
-        const ten_result = [] as number[];
-        _private.deref(ten, (x) => { ten_result.push(x); });
-        expect(ten.map(x => x.v)).toEqual([1, 9, 3, 7, 5]);
-        expect(ten_result).toEqual([1, 9, 3, 7, 5]);
+        for (const [k, _] of map) {
+            map.delete(k);
+        }
+        expect(map.size).toBe(0);
     });
 });
 

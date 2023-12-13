@@ -274,7 +274,7 @@ export const execution = { handler: ManualExecution as ExecutionHandler };
 
 //#region Flags and Counters
 // Call tracking
-type CallTrackState = { deps: Node[] | undefined, nocall: boolean, nowrite: boolean };
+type CallTrackState = { deps: ValueNode<any>[] | undefined, nocall: boolean, nowrite: boolean };
 let track: CallTrackState = { deps: undefined, nocall: false, nowrite: false };
 const ERR_CALL = "Calling an effect within a derived/effect callback is not allowed.";
 const ERR_WRITE = "Writing to a signal within a derived callback is not allowed";
@@ -282,27 +282,21 @@ const ERR_LOOP = "Recursive loop detected";
 
 // Monotonically increasing id number
 type NodeId = number;
-let seqId: NodeId = 0;
-function nextId(): NodeId {
-    return (++seqId);
-}
+const nextId = (() => {
+    let seqId: NodeId = 0;
+    return () => (++seqId);
+})();
 
 // Monotonically increasing sequence number
 type SequenceNumber = bigint;
 const MIN_SEQ: SequenceNumber = 0n;
-let seqN: SequenceNumber = MIN_SEQ;
-
-function nextN(): SequenceNumber {
-    return (++seqN);
-}
-
-export function currN(): SequenceNumber {
-    return seqN;
-}
+const [nextN, currN] = (() => {
+    let seqN: SequenceNumber = MIN_SEQ;
+    return [() => (++seqN), () => seqN];
+})();
 
 // Shorthands
 const def = Object.defineProperty;
-const vals = Object.values;
 
 //#endregion
 
@@ -337,8 +331,8 @@ function createDelayedExecutionHandler(): DelayedExecutionHandler {
         effects?.forEach(x => e[x.id] = x);
     }
     function update(): [DerivedSignal<any>[], Effect[]] {
-        const deriveds = vals(d);
-        const effects = vals(e);
+        const deriveds = Object.values(d);
+        const effects = Object.values(e);
         deriveds.forEach(x => x());
         effects.forEach(x => x());
         d = {};
@@ -369,87 +363,20 @@ abstract class Node {
 }
 
 /**
- * Base node for those that execute callbacks.
- * For this node the {@link Node.current} value is the maximum of all its node dependencies when it was last executed. 
- * @prop {} checked The sequence number when it was last checked against dependencies.
- * @prop {} visited The visited flag is used for loop detection.
- * @prop {} dropped True if the node is dropped from execution.
- * @method drop Drops the node from further execution.
- */
-abstract class ComplexNode extends Node {
-    protected checked: SequenceNumber;
-    protected visited: boolean = false;
-    private _dropped: boolean = false;
-
-    constructor() {
-        super(MIN_SEQ);
-        this.checked = MIN_SEQ;
-    }
-
-    get dropped() { return this._dropped; }
-
-    drop() {
-        this._dropped = true;
-    }
-}
-
-/**
- * Base node for those that depend on others.
- * @prop {} deps The value dependencies this node directly depends on.
- * @prop {} triggers The writable dependencies that will trigger reevaluation. Derived calculations are filtered out.
- */
-abstract class DependentNode extends ComplexNode {
-    abstract get deps(): ValueNode<any>[];
-    abstract get triggers(): Record<NodeId, SignalNode<any>>;
-
-    precheck(current: SequenceNumber): boolean {
-        if (current > this.checked) {
-            if (vals(this.triggers).some(y => y.current > this.checked)) {
-                return true;
-            }
-            this.checked = current;
-        }
-        return false;
-    }
-
-    protected max(): SequenceNumber {
-        return vals(this.triggers).reduce((x, c) => x.current > c.current ? x : c).current;
-    }
-
-    protected values(check: SequenceNumber): any[] {
-        return this.deps.map((x) => x instanceof DerivedNode ? x.value(check) : x.value())
-    }
-
-    protected extractTriggers(): Record<NodeId, SignalNode<any>> {
-        const t = {} as Record<NodeId, SignalNode<any>>;
-
-        for (let i = 0; i < this.deps.length; i++) {
-            const x = this.deps[i];
-            if (x instanceof DependentNode) {
-                Object.assign(t, x.triggers, t);
-            } else if (x instanceof SignalNode) {
-                t[x.id] = x
-            }
-        }
-        return t;
-    }
-}
-
-/**
  * The node for writable signals.
- * @prop {} value The current value of the given type.
- * @prop {} dependents Reverse of triggers
  * @method asWritable Wrap node in a writable facade.
  * @method asReadable Wrap node in a readable facade
+ * @method value The current value of the given type.
+ * @method register Called by dependent nodes to register itself from execution handling on this node.
+ * @method unregister Called by dependent nodes to unregister itself from execution handling on this node.
  */
 class SignalNode<T> extends Node {
     private _value: T;
-    readonly trigs: WeakRef<DependentNode>[];
+    private _trigs = new Map<NodeId, WeakRef<DependentNode>>();
 
     constructor(value: T) {
         super(nextN());
         this._value = value;
-        this.trigs = [];
     }
 
     asWritable(): WritableSignal<T> & Meta<SignalNode<T>> {
@@ -469,6 +396,14 @@ class SignalNode<T> extends Node {
 
     value(): T {
         return this._value;
+    }
+
+    register(dep: DependentNode) {
+        this._trigs.set(dep.id, new WeakRef(dep));
+    }
+
+    unregister(dep: DependentNode) {
+        this._trigs.delete(dep.id);
     }
 
     private rfun(value?: T): T {
@@ -491,17 +426,95 @@ class SignalNode<T> extends Node {
         const manual = execution.handler === ManualExecution;
         const deriveds = [] as DerivedSignal<any>[];
         const effects = [] as Effect[];
-        deref(this.trigs, (d) => {
-            if (manual || d.dropped) return;
+        for (const [k, v] of this._trigs) {
+            let d = v.deref();
+            if (!d || d.dropped) {
+                this._trigs.delete(k);
+                continue;
+            }
+            d.dirty = true;
+            if (manual) continue;
             if (d instanceof DerivedNode) {
                 deriveds.push(d.asDerived())
             }
             if (d instanceof EffectNode) {
                 effects.push(d.asEffect());
             }
-        });
+        }
         if (!manual) {
             execution.handler.changed(this.asReadable(), deriveds, effects);
+        }
+    }
+}
+
+/**
+ * Base node for those that depend on others.
+ * @prop {} dirty Flag set by signal node to notify reexecution.
+ * @prop {} checked The sequence number when it was last checked against dependencies.
+ * @prop {} visited The visited flag is used for loop detection.
+ * @prop {} dropped True if the node is dropped from execution.
+ * @prop {} deps The value dependencies this node directly depends on.
+ * @prop {} triggers The writable dependencies that will trigger reevaluation. Derived calculations are filtered out.
+ * @method precheck Check need for reexecution on this node.
+ * @method drop Drops the node from further execution.
+ */
+abstract class DependentNode extends Node {
+    dirty: boolean = true;
+    protected checked: SequenceNumber;
+    protected visited: boolean = false;
+    private _dropped: boolean = false;
+    private _deps: ValueNode<any>[] = [];
+    private _triggers = new Map<NodeId, SignalNode<any>>()
+
+    get deps(): ValueNode<any>[] { return this._deps; }
+    get triggers(): Map<NodeId, SignalNode<any>> { return this._triggers; }
+    get dropped() { return this._dropped; }
+
+    constructor() {
+        super(MIN_SEQ);
+        this.checked = MIN_SEQ;
+    }
+
+    precheck(current: SequenceNumber): boolean {
+        if (this.dirty) return true;
+        if (current > this.checked) {
+            for (const t of this.triggers.values()) {
+                if (t.current > this.checked) {
+                    return true;
+                }
+            }
+            this.checked = current;
+        }
+        return false;
+    }
+
+    drop() {
+        this._dropped = true;
+    }
+
+    protected values(check: SequenceNumber): any[] {
+        return this.deps.map((x) => x instanceof DerivedNode ? x.value(check) : x.value())
+    }
+
+    protected update(deps: ValueNode<any>[], current: boolean = true) {
+        this._deps = deps;
+        for (const remove of this._triggers.values()) {
+            remove.unregister(this);
+        }
+        this._triggers = new Map<NodeId, SignalNode<any>>();
+        for (const dep of deps) {
+            if (dep instanceof DependentNode) {
+                for (const trigger of dep._triggers.values()) {
+                    this._triggers.set(trigger.id, trigger);
+                }
+            }
+            else if (dep instanceof SignalNode) {
+                this._triggers.set(dep.id, dep);
+            }
+        }
+        for (const add of this._triggers.values()) {
+            add.register(this);
+            if (current && add.current > this.current) this.current = add.current;
         }
     }
 }
@@ -529,10 +542,11 @@ abstract class DerivedNode<T> extends DependentNode {
         if (this.visited) throw new ReentryError(ERR_LOOP);
         track.deps?.push(this);
         if (!this.dropped && check > this.checked) {
-            this.do(check);
+            if (this.dirty) {
+                this.do(check);
+                this.dirty = false;
+            }
 
-            // Derived nodes updates the sequence number each time a change check is performed.
-            // Since dependencies are fixed, this will filter out unneccessary traversals.
             this.checked = check;
         }
         return this._value!;
@@ -552,16 +566,27 @@ abstract class DerivedNode<T> extends DependentNode {
 class DynamicDerivedNode<T> extends DerivedNode<T> {
     private cb: () => T;
 
-    get deps(): ValueNode<any>[] { return []; }
-    get triggers(): Record<NodeId, SignalNode<any>> { return []; }
-
     constructor(calculation: () => T) {
         super();
         this.cb = calculation;
     }
 
     protected do(_: SequenceNumber): void {
-        this._value = this.cb();
+        // Store previous state.
+        const prev = track;
+        try {
+            // Execute callback
+            const deps = [] as ValueNode<any>[];
+            track = { deps, nocall: true, nowrite: true };
+            this.visited = true;
+            this._value = this.cb();
+            this.update(deps);
+        }
+        finally {
+            // Restore previous state
+            track = prev;
+            this.visited = false;
+        }
     }
 }
 
@@ -569,41 +594,31 @@ class DynamicDerivedNode<T> extends DerivedNode<T> {
  * The node for derived signals with fixed dependencies.    
  */
 class FixedDerivedNode<T> extends DerivedNode<T> {
-    private readonly _deps: ValueNode<any>[];
-    private readonly _triggers: Record<NodeId, SignalNode<any>>;
     private cb: Calculation<T>;
-
-    get deps() { return this._deps; }
-    get triggers() { return this._triggers; }
 
     constructor(dependencies: ValueNode<any>[], calculation: Calculation<T>) {
         super();
-        this._deps = dependencies;
-        this._triggers = this.extractTriggers();
         this.cb = calculation;
-        vals(this.triggers).forEach(x => x.trigs.push(new WeakRef(this)));
+        this.update(dependencies, false);
     }
 
     protected do(check: SequenceNumber): void {
-        const max = this.max();
-        if (max > this.checked) {
-            // Changes has occured in the dependencies.
-            const values = this.values(check);
+        // Changes has occured in the dependencies.
+        const values = this.values(check);
 
-            // Store previous state.
-            const prev = track;
-            try {
-                // Execute callback
-                track = { deps: undefined, nocall: true, nowrite: true };
-                this.visited = true;
-                this._value = this.cb(values);
-                this.current = max;
-            }
-            finally {
-                // Restore previous state
-                track = prev;
-                this.visited = false;
-            }
+        // Store previous state.
+        const prev = track;
+        try {
+            // Execute callback
+            track = { deps: undefined, nocall: true, nowrite: true };
+            this.visited = true;
+            this._value = this.cb(values);
+            this.update(this.deps);
+        }
+        finally {
+            // Restore previous state
+            track = prev;
+            this.visited = false;
         }
     }
 }
@@ -628,10 +643,11 @@ abstract class EffectNode extends DependentNode {
         if (this.visited) throw new ReentryError(ERR_LOOP);
         if (track.nocall) throw new ReentryError(ERR_CALL);
         if (!this.dropped && check > this.checked) {
-            this.do(check);
+            if (this.dirty) {
+                this.do(check);
+                this.dirty = false;
+            }
 
-            // Effect nodes updates the sequence number each time a change check is performed.
-            // Since dependencies are fixed, this will filter out unneccessary traversals.
             this.checked = check;
         }
     }
@@ -643,16 +659,27 @@ abstract class EffectNode extends DependentNode {
 class DynamicEffectNode extends EffectNode {
     private cb: () => void;
 
-    get deps(): ValueNode<any>[] { return []; }
-    get triggers(): Record<NodeId, SignalNode<any>> { return []; }
-
     constructor(action: () => void) {
         super();
         this.cb = action;
     }
 
     protected do(_: SequenceNumber): void {
-        this.cb();
+        // Store previous state.
+        const prev = track;
+        try {
+            // Execute callback
+            const deps = [] as ValueNode<any>[];
+            track = { deps, nocall: true, nowrite: false };
+            this.visited = true;
+            this.cb();
+            this.update(deps);
+        }
+        finally {
+            // Restore previous state
+            track = prev;
+            this.visited = false;
+        }
     }
 }
 
@@ -660,41 +687,31 @@ class DynamicEffectNode extends EffectNode {
  * The node for effect actions with fixed dependencies.
  */
 class FixedEffectNode extends EffectNode {
-    private readonly _deps: ValueNode<any>[];
-    private readonly _triggers: Record<NodeId, SignalNode<any>>;
     private cb: Action;
-
-    get deps() { return this._deps; }
-    get triggers() { return this._triggers; }
 
     constructor(dependencies: ValueNode<any>[], action: Action) {
         super();
-        this._deps = dependencies;
-        this._triggers = this.extractTriggers();
         this.cb = action;
-        vals(this.triggers).forEach(x => x.trigs.push(new WeakRef(this)));
+        this.update(dependencies, false);
     }
 
     protected do(check: SequenceNumber): void {
-        const max = this.max();
-        if (max > this.checked) {
-            // Changes has occured in the dependencies.
-            const values = this.values(check);
+        // Changes has occured in the dependencies.
+        const values = this.values(check);
 
-            // Store previous state.
-            const prev = track;
-            try {
-                // Execute callback
-                track = { deps: undefined, nocall: true, nowrite: false };
-                this.visited = true;
-                this.cb(values);
-                this.current = max;
-            }
-            finally {
-                // Restore previous state
-                track = prev;
-                this.visited = false;
-            }
+        // Store previous state.
+        const prev = track;
+        try {
+            // Execute callback
+            track = { deps: undefined, nocall: true, nowrite: false };
+            this.visited = true;
+            this.cb(values);
+            this.update(this.deps);
+        }
+        finally {
+            // Restore previous state
+            track = prev;
+            this.visited = false;
         }
     }
 }
@@ -719,30 +736,6 @@ type Meta<F> = {
     write?: boolean
 };
 
-type Deref<T> = { deref: () => T | undefined };
-/** Loops through an array of weak references, cleans out GC'ed items and calls back for the live ones. */
-function deref<T>(array: Deref<T>[], callback: (t: T) => void) {
-    for (let i = 0; i < array.length; i++) {
-        const weak = array[i];
-        const inst = weak?.deref();
-        if (!inst) {
-            // dead
-            const end = array.length - 1;
-            if (i < end) {
-                //more elements after this one, swap in last element
-                array[i] = array[end];
-            }
-            // remove last element
-            array.length = end;
-            // one step back
-            i--;
-            continue; // i++;
-        }
-
-        callback(inst);
-    }
-}
-
 /** Get value node from metadata */
 function vnode<T>(signal: ReadableSignal<T>): ValueNode<T> {
     return meta<ValueNode<T>>(signal)._self;
@@ -753,10 +746,4 @@ function meta<F>(signal: any): Meta<F> {
     return signal as Meta<F>;
 }
 //#endregion
-
-/** @ignore For testing purposes */
-export const _private = {
-    deref
-}
-
 //#endregion
