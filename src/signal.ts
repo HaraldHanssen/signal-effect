@@ -78,7 +78,7 @@ export interface ExecutionHandler {
 /** The delayed execution handler stores the affected deriveds and effects and executes them when {@link update} is called. */
 export interface DelayedExecutionHandler extends ExecutionHandler {
     /** Updates all affected deriveds and effects since last call. Returns them afterwards. */
-    update(): [DerivedSignal<any>[], Effect[]];
+    update(): [IterableIterator<DerivedSignal<any>>, IterableIterator<Effect>];
 }
 
 export interface ManualExecutionHandler extends ExecutionHandler {
@@ -318,20 +318,20 @@ function createImmediateExecutionHandler(): ExecutionHandler {
 }
 
 function createDelayedExecutionHandler(): DelayedExecutionHandler {
-    let d: Record<NodeId, DerivedSignal<any>> = {};
-    let e: Record<NodeId, Effect> = {};
+    let d = new Map<NodeId, DerivedSignal<any>>();
+    let e = new Map<NodeId, Effect>();
     function changed(_: ReadableSignal<any> | undefined, deriveds: DerivedSignal<any>[] | undefined, effects: Effect[] | undefined) {
-        if (deriveds) for (const x of deriveds) d[x.id] = x;
-        if (effects) for (const x of effects) e[x.id] = x;
+        if (deriveds) for (const x of deriveds) d.set(x.id, x);
+        if (effects) for (const x of effects) e.set(x.id, x);
     }
-    function update(): [DerivedSignal<any>[], Effect[]] {
-        const deriveds = Object.values(d);
-        const effects = Object.values(e);
-        for (const x of deriveds) x();
-        for (const x of effects) x();
-        d = {};
-        e = {};
-        return [deriveds, effects];
+    function update(): [IterableIterator<DerivedSignal<any>>, IterableIterator<Effect>] {
+        const deriveds = d;
+        const effects = e;
+        d = new Map();
+        e = new Map();
+        for (const x of deriveds.values()) x();
+        for (const x of effects.values()) x();
+        return [deriveds.values(), effects.values()];
     }
     return { changed, update };
 }
@@ -349,8 +349,8 @@ function createDelayedExecutionHandler(): DelayedExecutionHandler {
 abstract class Node {
     readonly id: NodeId;
     private _current: SequenceNumber;
-    protected _in = new Map<NodeId, ValueNode<any>>();
-    protected _out = new Map<NodeId, WeakRef<DependentNode>>();
+    protected _in?:Map<NodeId, ValueNode<any>> = undefined;
+    protected _out?:Map<NodeId, WeakRef<DependentNode>> = undefined;
 
     get current() { return this._current; }
     protected set current(v: SequenceNumber) { this._current = v };
@@ -365,11 +365,12 @@ abstract class Node {
         const manual = execution.handler === ManualExecution;
         const deriveds = [] as DerivedSignal<any>[];
         const effects = [] as Effect[];
-        
+
         const visited = new Set<DerivedNode<any>>();
         const traverse = [this] as Node[];
         while (traverse.length > 0) {
             const source = traverse.pop()!;
+            if (!source._out) continue;
             for (const [k, v] of source._out) {
                 let d = v.deref();
                 if (!d || d.dropped) {
@@ -405,13 +406,13 @@ abstract class Node {
     }
 
     static link(source: ValueNode<any>, target: DependentNode) {
-        target._in.set(source.id, source);
-        (source as Node)._out.set(target.id, new WeakRef(target));
+        target._in!.set(source.id, source);
+        (source as Node)._out!.set(target.id, new WeakRef(target));
     }
 
     static unlink(source: ValueNode<any>, target: DependentNode) {
-        target._in.delete(source.id);
-        (source as Node)._out.delete(target.id);
+        target._in!.delete(source.id);
+        (source as Node)._out!.delete(target.id);
     }
 }
 
@@ -427,6 +428,7 @@ class SignalNode<T> extends Node {
     constructor(value: T) {
         super(nextN());
         this._value = value;
+        this._out = new Map();
     }
 
     asWritable(): WritableSignal<T> & Meta<SignalNode<T>> {
@@ -490,24 +492,26 @@ abstract class DependentNode extends Node {
         this.checked = MIN_SEQ;
     }
 
-    dirty(current: SequenceNumber): boolean {
+    dirty(current: SequenceNumber) {
         this._dirty = current > this.current;
-        return this._dirty;
     }
 
     drop() {
         this._dropped = true;
     }
 
-    protected update(deps: ValueNode<any>[], current: boolean = true) {
-        for (const dep of this._in.values()) { 
+    protected update(deps: ValueNode<any>[], dynamic: boolean = true) {
+        for (const dep of this._in!.values()) {
             Node.unlink(dep, this);
         }
-        for (const dep of deps) { 
+        for (const dep of deps) {
             Node.link(dep, this);
-            if (current && dep.current > this.current) this.current = dep.current;
+            if (dynamic && dep.current > this.current) this.current = dep.current;
         }
-        this.notify(this.current);
+        
+        if (dynamic) {
+            this.notify(this.current);
+        }
     }
 }
 
@@ -521,6 +525,8 @@ abstract class DerivedNode<T> extends DependentNode {
     constructor() {
         super();
         this._value = undefined;
+        this._in = new Map();
+        this._out = new Map();
     }
 
     asDerived(): DerivedSignal<T> & Meta<DerivedNode<T>> {
@@ -572,7 +578,7 @@ class DynamicDerivedNode<T> extends DerivedNode<T> {
             track = { deps, nocall: true, nowrite: true };
             this.visited = true;
             this._value = this.cb();
-            this.update(deps);
+            this.update(deps, true);
         }
         finally {
             // Restore previous state
@@ -598,7 +604,7 @@ class FixedDerivedNode<T> extends DerivedNode<T> {
 
     protected do(check: SequenceNumber): void {
         // Changes has occured in the dependencies.
-        const values = this.vo.map(x => this._in.get(x)?.value(check));
+        const values = this.vo.map(x => this._in!.get(x)?.value(check));
 
         // Store previous state.
         const prev = track;
@@ -621,6 +627,10 @@ class FixedDerivedNode<T> extends DerivedNode<T> {
  * @method asEffect Wrap node in an effect facade. May be called manually via or via an execution handler.
  */
 abstract class EffectNode extends DependentNode {
+    constructor() {
+        super();
+        this._in = new Map();
+    }
 
     asEffect(): Effect & Meta<EffectNode> {
         let f = this.fun.bind(this) as Effect & Meta<EffectNode>;
@@ -666,7 +676,7 @@ class DynamicEffectNode extends EffectNode {
             track = { deps, nocall: true, nowrite: false };
             this.visited = true;
             this.cb();
-            this.update(deps);
+            this.update(deps, true);
         }
         finally {
             // Restore previous state
@@ -692,7 +702,7 @@ class FixedEffectNode extends EffectNode {
 
     protected do(check: SequenceNumber): void {
         // Changes has occured in the dependencies.
-        const values = this.vo.map(x => this._in.get(x)?.value(check));
+        const values = this.vo.map(x => this._in!.get(x)?.value(check));
 
         // Store previous state.
         const prev = track;
