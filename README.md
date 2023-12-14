@@ -16,19 +16,57 @@ Reactive signal library without any dependencies.
     Uses one or more ```signal``` and/or ```derived``` values to act as triggers on other parts of your system.
 
 ## The following set of features:
+- **Fixed Dependencies**
+
+    ```derived```s and ```effect```s can take their dependencies up front and get their values as arguments in the callback.
+
+    ```js
+    const [s1, s2, s3] = signals(1, 2, 3);
+    const d = derived(s1, s2, s3, (x, y, x) => x + y z);
+    const c = computed(s1, s2, s3, (x, y, x) => x + y z);
+    const e = effect(s1, s2, s3, (x, y, x) => do(x + y z));
+    ```
+
+- **Dynamic Dependencies**
+
+    ```derived```s and ```effect```s can use dependencies directly in the callback. This is the most common way of using signals.
+
+    ```js
+    const [s1, s2, s3] = signals(1, 2, 3);
+    const d = derived(() => s1() + s2() + s3());
+    const c = computed(() => s1() + s2() + s3());
+    const e = effect(() => do(s1() + s2() + s3()));
+    ```
+
 - **Readonly Wrapping**
 
     ```signal```s can be exposed to consumers as a readonly value.
+
+    ```js
+    const s = signal(false);
+    s();       //get ok
+    s(true);   //set ok
+    const r = readonly(s);
+    r();       //get ok
+    r(false);  //throws error
+    ```
 
 - **Object Properties**
 
     ```signal```s and ```derived```s can be attached as properties to an object. Allows normal get/set coding.
 
+    ```js
+    const dialog = {};
+    propup(dialog, "name", signal(""));
+    dialog.name = "Douglas";  //setter
+    const n = dialog.name;    //getter
+    ```
+
 - **Reentry Prevention**
 
     Will throw error if a loop is detected, or if a ```derived``` calculations try to write to ```signal```s.
     
-    ```effect```s are allowed to manually read and write back to the signals again, this _will not_ cause endless recursion until stack overflow. The calculations and effects are snapshots.
+    ```effect```s are allowed to write back to the signals again. This allows value feedback loops, a scenario that can trigger recursion. This is prevented by snapshotting. 
 
 - **GC Friendly**
 
@@ -166,12 +204,12 @@ Notes:
 - (f) indicates fixed dependencies. Dependencies are fixed if they are stated upfront like this:
 
     ```
-    derived(f1, f2, f3, (x, y, x) => x + y z);
+    derived(s1, s2, s3, (x, y, x) => x + y z);
     ```
 - (d) indicates dynamic dependencies. Dependencies are dynamic if they are stated in the callback like this:
 
     ```
-    derived(() => f1() + f2() + f3());
+    derived(() => s1() + s2() + s3());
     ```
 
 - The "manual (d)\5000 error*" is caused by a _maximum call stack exceeded_ error. Unavoidable in this test with closures that call upon each other.
@@ -179,10 +217,10 @@ Notes:
     Immediate and Delayed are not affected as they executes from the source and outward into the graph. The manual strategy only executes on the point of entry provided to it.
 
 ## TODOs
-- [ ] Automatic dependency discovery for deriveds and effects. Just provide the callback and the rest is figured out.
 - [ ] Scoped execution handlers.  
 - [ ] Scoped create and drop. Track creation of primitives and drop them together.
 - [ ] Allow internal modification of objects and arrays without set. Avoids the need to reconstruct the entire object/array.
+- [x] Automatic dependency discovery for deriveds and effects. Just provide the callback and the rest is figured out.
 - [x] Explicit removal of effects and deriveds (drop). Useful in Immediate/Delayed execution.
 - [x] Custom execution handlers.
 - [x] Support reading (of independent) signals in effect calculations.
