@@ -98,7 +98,7 @@ Reactive signal library without any dependencies.
 
 - **Delayed**
 
-    Gathers all affected ```derived```s and ```effect```s when ```signal```s change. Execute them at a convenient time when the _update_ method is called.
+    Gathers all affected ```derived```s and ```effect```s when ```signal```s change. Execute them at a convenient time with the _update_ method.
 
 - **Custom**
 
