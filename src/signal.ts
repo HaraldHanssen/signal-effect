@@ -431,7 +431,6 @@ abstract class Node {
             }
         }
 
-        if (deriveds.length == 0 && effects.length == 0) return;
         if (diagnostic?.enabled) diagnostic.counters.notifyDeps += deriveds.length + effects.length;
 
         const prev = track;
