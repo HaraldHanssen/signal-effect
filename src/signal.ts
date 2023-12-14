@@ -130,6 +130,15 @@ export function signals<P extends WritableSignalInitTypes>(...initials: P): Writ
     return initials.map(x => signal(x)) as WritableSignalInitValues<P>;
 }
 
+/** 
+ * Modify internal properties or elements within a signal and set the result.
+ * Useful for large nested objects and array manipulation, where the cost of
+ * modification is great.
+*/
+export function modify<T>(signal: WritableSignal<T>, manipulate: (t: T) => void): void {
+    SignalNode.modify(signal, manipulate);
+}
+
 /** Create a read only signal from an existing signal. */
 export function readonly<T>(signal: WritableSignal<T>): ReadableSignal<T> {
     return SignalNode.readonly(signal);
@@ -505,16 +514,33 @@ class SignalNode<T> extends Node {
         exit();
     }
 
+    private mfun(manipulate: (t: T) => void): void {
+        if (track.nowrite) throw new ReentryError(ERR_WRITE);
+        enter();
+        manipulate(this._value);
+        this.current = nextN();
+        handle(this, this.current);
+        exit();
+    }
+
     static signal<T>(initial: T): WritableSignal<T> {
         return new SignalNode<T>(initial).asWritable();
     }
 
     static readonly<T>(signal: WritableSignal<T>): ReadableSignal<T> {
+        return SignalNode.toNode(signal).asReadable();
+    }
+
+    static modify<T>(signal: WritableSignal<T>, manipulate: (t: T) => void): void {
+        SignalNode.toNode(signal).mfun(manipulate);
+    }
+
+    private static toNode<T>(signal: WritableSignal<T>): SignalNode<T> {
         const m = meta<SignalNode<T>>(signal);
-        if (!(m._self instanceof SignalNode)) {
+        if (!(m._self instanceof SignalNode) || !m.write) {
             throw new SignalError("Expected a writable signal.");
         }
-        return m._self.asReadable();
+        return m._self;
     }
 }
 

@@ -62,6 +62,16 @@ Reactive signal library without any dependencies.
     const n = dialog.name;    //getter
     ```
 
+
+- **Object/Array Modification**
+
+    ```signal```s allow internal modification of objects and arrays. Reduces cost of changing complex types.
+
+    ```js
+    const author = signal({ name: "Douglas", surname: "" });
+    modify(author, x => x.surname = "Adams");
+    ```
+
 - **Reentry Prevention**
 
     Will throw error if a loop is detected, or if a ```derived``` calculation try to write to ```signal```s.
@@ -129,6 +139,15 @@ propup(dialog, "canAccept", readonly(canAccept));
 
 console.log(dialog.canAccept); // outputs 'false'
 dialog.canAccept = true; // throws error, does not contain setter
+```
+
+### Modify signal in place
+```js
+const author = signal({ name: "Douglas", surname: "" });
+const fullname = derived(author, x => (x.name + " " + x.surname).trim() );
+console.log(fullname()); // outputs 'Douglas'
+modify(author, x => x.surname = "Adams");
+console.log(fullname()); // outputs 'Douglas Adams'
 ```
 
 ### Derive a new signal from another
@@ -207,12 +226,12 @@ Notes:
 
     Immediate and Delayed are not affected as they execute from the source and outward into the graph. The manual strategy only executes on the point of entry provided to it.
 
-- Immediate is somewhat slower (in this test) since this strategy executes all affected dependcies each time a single change has occurred.
+- Immediate is somewhat slower (in this test) since this strategy executes all affected dependencies each time a single change has occurred.
 
 ## TODOs
 - [ ] Scoped execution handlers.  
 - [ ] Scoped create and drop. Track creation of primitives and drop them together.
-- [ ] Allow internal modification of objects and arrays without set. Avoids the need to reconstruct the entire object/array.
+- [x] Allow internal modification of objects and arrays without set. Avoids the need to reconstruct the entire object/array.
 - [x] Automatic dependency discovery for deriveds and effects. Just provide the callback and the rest is figured out.
 - [x] Explicit removal of effects and deriveds (drop). Useful in Immediate/Delayed execution.
 - [x] Custom execution handlers.

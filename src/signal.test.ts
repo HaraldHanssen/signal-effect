@@ -2,7 +2,7 @@
  * @license MIT
  * Copyright (c) 2023 Harald Hanssen
  */
-import { ReentryError, propup, derived, effect, readonly, signal, signals, update, SignalError, ExecutionHandler, execution, ImmediateExecution, DelayedExecution, drop, ReadableSignal, DelayedExecutionHandler, DerivedSignal, diagnostic } from "./signal";
+import { ReentryError, propup, derived, effect, readonly, signal, signals, update, SignalError, ExecutionHandler, execution, ImmediateExecution, DelayedExecution, drop, ReadableSignal, DelayedExecutionHandler, DerivedSignal, diagnostic, modify } from "./signal";
 
 const jestConsole = console;
 
@@ -42,6 +42,17 @@ describe("Basics", () => {
         expect(r()).toBe(42);
         s(43);
         expect(r()).toBe(43);
+    });
+
+    test("modify signal value", () => {
+        const theObject = signal({ meaning: 4 });
+        const theArray = signal([4]);
+
+        modify(theObject, x => x.meaning += 38);
+        modify(theArray, x => x.push(2));
+
+        expect(theObject()).toStrictEqual({ meaning: 42 });
+        expect(theArray()).toStrictEqual([4, 2]);
     });
 
     test("calc derived value of 1 signal", () => {
@@ -663,6 +674,13 @@ describe("Examples", () => {
         expect(dialog.canAccept).toBe(false);
         expect(() => dialog.canAccept = true).toThrow(TypeError);
     });
+    test("example modify signal in place", () => {
+        const author = signal({ name: "Douglas", surname: "" });
+        const fullname = derived(author, x => (x.name + " " + x.surname).trim());
+        expect(fullname()).toBe("Douglas");
+        modify(author, x => x.surname = "Adams");
+        expect(fullname()).toBe("Douglas Adams");
+    });
     test("example derive a new signal from another", () => {
         const name = signal("Douglas");
         const surname = signal("");
@@ -816,7 +834,7 @@ describe("Performance", () => {
         const endTime = performance.now() - startTime;
         if (log) console.log("end", diagnostic.counters);
         if (log) diagnostic.reset();
-        expect(SOLUTIONS[layers]).toEqual(solution);
+        expect(SOLUTIONS[layers]).toStrictEqual(solution);
         return endTime;
     }
 
