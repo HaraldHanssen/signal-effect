@@ -64,7 +64,7 @@ Reactive signal library without any dependencies.
 
 - **Reentry Prevention**
 
-    Will throw error if a loop is detected, or if a ```derived``` calculations try to write to ```signal```s.
+    Will throw error if a loop is detected, or if a ```derived``` calculation try to write to ```signal```s.
     
     ```effect```s are allowed to write back to the signals again. This allows value feedback loops, a scenario that can trigger recursion. This is prevented by snapshotting. 
 
@@ -92,7 +92,7 @@ Reactive signal library without any dependencies.
 
 - **Custom**
 
-    Roll your own strategy. Implement the _ExecutionHandler_ interface, it notifies each ```signal``` change and provides the affected ```derived```s and ```effect```s.
+    Roll your own strategy. Implement the _ExecutionHandler_ interface, it notifies each ```signal``` change and provides the ```derived```s and ```effect```s that directly depend on it.
 
 ## Examples
 ### Create a signal
