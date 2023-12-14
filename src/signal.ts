@@ -170,9 +170,7 @@ export function derived(...args: any[]): any {
         return [args.slice(0, -1).map(vnode), (a: any[]) => cb(...a)];
     }
 
-    const d = args.length == 1 ? new DynamicDerivedNode<any>(args[0]).asDerived() : new FixedDerivedNode<any>(...fromArgs()).asDerived();
-    execution.handler.changed(undefined, [d], undefined);
-    return d;
+    return args.length == 1 ? DynamicDerivedNode.derived<any>(args[0]) : FixedDerivedNode.derived<any>(...fromArgs());
 }
 
 /**
@@ -209,9 +207,7 @@ export function effect(...args: any[]): any {
         return [args.slice(0, -1).map(vnode), (a: any[]) => cb(...a)];
     }
 
-    const e = args.length == 1 ? new DynamicEffectNode(args[0]).asEffect() : new FixedEffectNode(...fromArgs()).asEffect();
-    execution.handler.changed(undefined, undefined, [e]);
-    return e;
+    return args.length == 1 ? DynamicEffectNode.effect(args[0]) : FixedEffectNode.effect(...fromArgs());
 }
 
 /** Transform a signal to become a property on an object. Creates new object if null or undefined. */
@@ -630,7 +626,7 @@ abstract class DerivedNode<T> extends DependentNode {
 class DynamicDerivedNode<T> extends DerivedNode<T> {
     private cb: () => T;
 
-    constructor(calculation: () => T) {
+    private constructor(calculation: () => T) {
         super();
         this.cb = calculation;
     }
@@ -650,6 +646,12 @@ class DynamicDerivedNode<T> extends DerivedNode<T> {
         }
         this.update(deps, true, !Object.is(val, this.value));
     }
+
+    static derived<T>(calculation: () => T): DerivedSignal<T> {
+        const d = new DynamicDerivedNode<T>(calculation).asDerived();
+        execution.handler.changed(undefined, [d], undefined);
+        return d;
+    }
 }
 
 /**
@@ -659,7 +661,7 @@ class FixedDerivedNode<T> extends DerivedNode<T> {
     private deps: ValueNode<any>[];
     private cb: Calculation<T>;
 
-    constructor(dependencies: ValueNode<any>[], calculation: Calculation<T>) {
+    private constructor(dependencies: ValueNode<any>[], calculation: Calculation<T>) {
         super();
         this.deps = dependencies;
         this.cb = calculation;
@@ -680,6 +682,12 @@ class FixedDerivedNode<T> extends DerivedNode<T> {
             track = prev;
         }
         this.update(this.deps, false, !Object.is(val, this.value));
+    }
+
+    static derived<T>(dependencies: ValueNode<any>[], calculation: Calculation<T>): DerivedSignal<T> {
+        const d = new FixedDerivedNode<T>(dependencies, calculation).asDerived();
+        execution.handler.changed(undefined, [d], undefined);
+        return d;
     }
 }
 
@@ -728,7 +736,7 @@ abstract class EffectNode extends DependentNode {
 class DynamicEffectNode extends EffectNode {
     private cb: () => void;
 
-    constructor(action: () => void) {
+    private constructor(action: () => void) {
         super();
         this.cb = action;
     }
@@ -747,6 +755,12 @@ class DynamicEffectNode extends EffectNode {
         }
         this.update(deps, true, false);
     }
+
+    static effect(action: () => void): Effect {
+        let e = new DynamicEffectNode(action).asEffect();
+        execution.handler.changed(undefined, undefined, [e]);
+        return e;
+    }
 }
 
 /**
@@ -756,7 +770,7 @@ class FixedEffectNode extends EffectNode {
     private deps: ValueNode<any>[];
     private cb: Action;
 
-    constructor(dependencies: ValueNode<any>[], action: Action) {
+    private constructor(dependencies: ValueNode<any>[], action: Action) {
         super();
         this.deps = dependencies;
         this.cb = action;
@@ -776,6 +790,12 @@ class FixedEffectNode extends EffectNode {
             this.visited = false;
         }
         this.update(this.deps, false, false);
+    }
+
+    static effect(dependencies: ValueNode<any>[], action: Action): Effect {
+        let e = new FixedEffectNode(dependencies, action).asEffect();
+        execution.handler.changed(undefined, undefined, [e]);
+        return e;
     }
 }
 
