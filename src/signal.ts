@@ -122,7 +122,7 @@ type WritableProperty<P extends PropertyKey, T> = { [K in P]: T };
 
 /** Create a single writable signal with the provided initial value. */
 export function signal<T>(initial: T): WritableSignal<T> {
-    return new SignalNode<T>(initial).asWritable();
+    return SignalNode.signal<T>(initial);
 }
 
 /** Create an array of writable signals with the provided initial value. */
@@ -132,11 +132,7 @@ export function signals<P extends WritableSignalInitTypes>(...initials: P): Writ
 
 /** Create a read only signal from an existing signal. */
 export function readonly<T>(signal: WritableSignal<T>): ReadableSignal<T> {
-    const m = meta<SignalNode<T>>(signal);
-    if (!(m._self instanceof SignalNode)) {
-        throw new SignalError("Expected a writable signal.");
-    }
-    return m._self.asReadable();
+    return SignalNode.readonly(signal);
 }
 
 /** 
@@ -464,7 +460,7 @@ abstract class Node {
 class SignalNode<T> extends Node {
     private _value: T;
 
-    constructor(value: T) {
+    private constructor(value: T) {
         super(nextN());
         this._value = value;
         this._out = new Map();
@@ -507,6 +503,18 @@ class SignalNode<T> extends Node {
         this.current = nextN();
         handle(this, this.current);
         exit();
+    }
+
+    static signal<T>(initial: T): WritableSignal<T> {
+        return new SignalNode<T>(initial).asWritable();
+    }
+
+    static readonly<T>(signal: WritableSignal<T>): ReadableSignal<T> {
+        const m = meta<SignalNode<T>>(signal);
+        if (!(m._self instanceof SignalNode)) {
+            throw new SignalError("Expected a writable signal.");
+        }
+        return m._self.asReadable();
     }
 }
 
