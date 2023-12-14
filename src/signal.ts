@@ -392,59 +392,60 @@ abstract class Node {
     notify(current: SequenceNumber) {
         if (diagnostic?.enabled) diagnostic.counters.notify++;
         // Notify execution handler
-        const manual = execution.handler === ManualExecution;
         const deriveds = [] as DerivedSignal<any>[];
         const effects = [] as Effect[];
 
-        const visited = new Set<DerivedNode<any>>();
-        // const traverse = [this] as Node[];
-        // while (traverse.length > 0) {
-            // const source = traverse.pop()!;
-            const source = this;
-            // if (!source._out) continue;
-            for (const [k, v] of source._out!) {
+        // Logic:
+        // Traverse out and alert dependants. Stop traversal on nodes that already are alerted.
+        // Send this._out to execution handler.
+
+        const traverse = [this] as Node[];
+        for (let i = 0; i < traverse.length; i++) {
+            const source = traverse[i];
+            if (!source._out) continue;
+            for (const [k, v] of source._out) {
                 let d = v.deref();
+
+                // clean
                 if (!d || d.dropped) {
                     source._out!.delete(k);
                     continue;
                 }
-                if (d instanceof DerivedNode) {
-                    if (visited.has(d)) {
-                        // been here before, ignore.
-                        continue;
+
+                // traverse dependencies for alert
+                if (d.alert(current)) {
+                    if (d instanceof DerivedNode) {
+                        traverse.push(d);
                     }
-                    visited.add(d);
-                    // traverse.push(d);
-                }
-                if (!d.notifyNeeded(current)) continue;
-                if (manual) continue;
-                if (d instanceof DerivedNode) {
-                    deriveds.push(d.asDerived())
-                }
-                if (d instanceof EffectNode) {
-                    effects.push(d.asEffect());
+                };
+
+                // gather this._out
+                if (i == 0) {
+                    if (d instanceof DerivedNode) {
+                        deriveds.push(d.asDerived())
+                    }
+                    if (d instanceof EffectNode) {
+                        effects.push(d.asEffect());
+                    }
                 }
             }
-        // }
+        }
 
-        if (manual) return;
         if (deriveds.length == 0 && effects.length == 0) return;
         if (diagnostic?.enabled) diagnostic.counters.notifyDeps += deriveds.length + effects.length;
 
-        if (!manual) {
-            const prev = track;
-            try {
-                track = { deps: undefined, nocall: false, nowrite: false };
-                if (this instanceof SignalNode) {
-                    execution.handler.changed(this.asReadable(), deriveds, effects);
-                }
-                else if (this instanceof DerivedNode) {
-                    execution.handler.changed(this.asDerived(), deriveds, effects);
-                }
+        const prev = track;
+        try {
+            track = { deps: undefined, nocall: false, nowrite: false };
+            if (this instanceof SignalNode) {
+                execution.handler.changed(this.asReadable(), deriveds, effects);
             }
-            finally {
-                track = prev;
+            else if (this instanceof DerivedNode) {
+                execution.handler.changed(this.asDerived(), deriveds, effects);
             }
+        }
+        finally {
+            track = prev;
         }
     }
 
@@ -538,7 +539,7 @@ abstract class DependentNode extends Node {
         this.checked = MIN_SEQ;
     }
 
-    notifyNeeded(current: SequenceNumber): boolean {
+    alert(current: SequenceNumber): boolean {
         const wasDirty = this._dirty;
         this._dirty = current > this.current;
         return wasDirty != this._dirty;
