@@ -160,11 +160,6 @@ export function derived<P extends ReadableSignalTypes, T>(sources: P, calc: (val
 export function derived<T>(calc: () => T): DerivedSignal<T>;
 export function derived(...args: any[]): any {
     if (args.length < 1) throw new SignalError("Expected at least 1 parameters!");
-    if (args.length == 1) {
-        const d = new DynamicDerivedNode<any>(args[0]).asDerived();
-        execution.handler.changed(undefined, [d], undefined);
-        return d;
-    }
 
     function fromArgs(): [ValueNode<any>[], Calculation<any>] {
         if (args.length == 2 && Array.isArray(args[0])) {
@@ -175,7 +170,7 @@ export function derived(...args: any[]): any {
         return [args.slice(0, -1).map(vnode), (a: any[]) => cb(...a)];
     }
 
-    const d = new FixedDerivedNode<any>(...fromArgs()).asDerived();
+    const d = args.length == 1 ? new DynamicDerivedNode<any>(args[0]).asDerived() : new FixedDerivedNode<any>(...fromArgs()).asDerived();
     execution.handler.changed(undefined, [d], undefined);
     return d;
 }
@@ -204,11 +199,6 @@ export function effect<P extends ReadableSignalTypes>(sources: P, act: (values: 
 export function effect(act: () => void): Effect;
 export function effect(...args: any[]): any {
     if (args.length < 1) throw new SignalError("Expected at least 1 parameters!");
-    if (args.length == 1) {
-        const d = new DynamicEffectNode(args[0]).asEffect();
-        execution.handler.changed(undefined, [d], undefined);
-        return d;
-    }
 
     function fromArgs(): [ValueNode<any>[], Action] {
         if (args.length == 2 && Array.isArray(args[0])) {
@@ -219,7 +209,7 @@ export function effect(...args: any[]): any {
         return [args.slice(0, -1).map(vnode), (a: any[]) => cb(...a)];
     }
 
-    const e = new FixedEffectNode(...fromArgs()).asEffect();
+    const e = args.length == 1 ? new DynamicEffectNode(args[0]).asEffect() : new FixedEffectNode(...fromArgs()).asEffect();
     execution.handler.changed(undefined, undefined, [e]);
     return e;
 }
@@ -273,12 +263,51 @@ export const execution = { handler: ManualExecution as ExecutionHandler };
 //#region Internals
 
 //#region Flags and Counters
+// Diagnostic
+export const diagnostic = {
+    enabled: false,
+    counters: { notify: 0, notifyDeps: 0, maxHandles: 0 },
+    reset: () => {
+        diagnostic.counters = { notify: 0, notifyDeps: 0, maxHandles: 0 }
+    }
+};
+
 // Call tracking
 type CallTrackState = { deps: ValueNode<any>[] | undefined, nocall: boolean, nowrite: boolean };
-let track: CallTrackState = { deps: undefined, nocall: false, nowrite: false };
 const ERR_CALL = "Calling an effect within a derived/effect callback is not allowed.";
 const ERR_WRITE = "Writing to a signal within a derived callback is not allowed";
 const ERR_LOOP = "Recursive loop detected";
+let track: CallTrackState = { deps: undefined, nocall: false, nowrite: false };
+const [enter, handle, exit] = (() => {
+    let depth = 0;
+    let processing = false;
+    const handles = [] as [Node, SequenceNumber][];
+    function enter() {
+        depth++;
+    }
+    function handle(n: Node, s: SequenceNumber) {
+        handles.push([n, s]);
+    }
+    function exit() {
+        depth--;
+        if (depth == 0 && !processing) {
+            try {
+                processing = true;
+                for (let i = 0; i < handles.length; i++) {
+                    const [n, s] = handles[i];
+                    n.notify(s);
+                }
+                if (diagnostic?.enabled && diagnostic.counters.maxHandles < handles.length) {
+                    diagnostic.counters.maxHandles = handles.length;
+                }
+                handles.length = 0;
+            } finally {
+                processing = false;
+            }
+        }
+    }
+    return [enter, handle, exit];
+})();
 
 // Monotonically increasing id number
 type NodeId = number;
@@ -310,26 +339,9 @@ function createManualExecutionHandler(): ManualExecutionHandler {
 }
 
 function createImmediateExecutionHandler(): ExecutionHandler {
-    //Implemented as a queue to guard against recursive effects.
-    let head = 0;
-    let tail = 0;
-    let queue = [] as [DerivedSignal<any>[] | undefined, Effect[] | undefined][];
     function changed(_: ReadableSignal<any> | undefined, deriveds: DerivedSignal<any>[] | undefined, effects: Effect[] | undefined) {
-        queue.push([deriveds, effects]);
-        tail++;
-
-        // If in progress earlier in the call stact, just return
-        if (tail - head > 1) return;
-
-        while (tail > head) {
-            const [d, e] = queue[head];
-            if (d) for (const x of d) x();
-            if (e) for (const x of e) x();
-            head++;
-        }
-        queue.length = 0;
-        head = 0;
-        tail = 0;
+        if (deriveds) for (const x of deriveds) x();
+        if (effects) for (const x of effects) x();
     }
     return { changed };
 }
@@ -378,20 +390,22 @@ abstract class Node {
     }
 
     notify(current: SequenceNumber) {
+        if (diagnostic?.enabled) diagnostic.counters.notify++;
         // Notify execution handler
         const manual = execution.handler === ManualExecution;
         const deriveds = [] as DerivedSignal<any>[];
         const effects = [] as Effect[];
 
         const visited = new Set<DerivedNode<any>>();
-        const traverse = [this] as Node[];
-        while (traverse.length > 0) {
-            const source = traverse.pop()!;
-            if (!source._out) continue;
-            for (const [k, v] of source._out) {
+        // const traverse = [this] as Node[];
+        // while (traverse.length > 0) {
+            // const source = traverse.pop()!;
+            const source = this;
+            // if (!source._out) continue;
+            for (const [k, v] of source._out!) {
                 let d = v.deref();
                 if (!d || d.dropped) {
-                    source._out.delete(k);
+                    source._out!.delete(k);
                     continue;
                 }
                 if (d instanceof DerivedNode) {
@@ -400,9 +414,9 @@ abstract class Node {
                         continue;
                     }
                     visited.add(d);
-                    traverse.push(d);
+                    // traverse.push(d);
                 }
-                d.dirty(current)
+                if (!d.notifyNeeded(current)) continue;
                 if (manual) continue;
                 if (d instanceof DerivedNode) {
                     deriveds.push(d.asDerived())
@@ -411,13 +425,25 @@ abstract class Node {
                     effects.push(d.asEffect());
                 }
             }
-        }
+        // }
+
+        if (manual) return;
+        if (deriveds.length == 0 && effects.length == 0) return;
+        if (diagnostic?.enabled) diagnostic.counters.notifyDeps += deriveds.length + effects.length;
+
         if (!manual) {
-            if (this instanceof SignalNode) {
-                execution.handler.changed(this.asReadable(), deriveds, effects);
+            const prev = track;
+            try {
+                track = { deps: undefined, nocall: false, nowrite: false };
+                if (this instanceof SignalNode) {
+                    execution.handler.changed(this.asReadable(), deriveds, effects);
+                }
+                else if (this instanceof DerivedNode) {
+                    execution.handler.changed(this.asDerived(), deriveds, effects);
+                }
             }
-            else if (this instanceof DerivedNode) {
-                execution.handler.changed(this.asDerived(), deriveds, effects);
+            finally {
+                track = prev;
             }
         }
     }
@@ -480,9 +506,11 @@ class SignalNode<T> extends Node {
         };
         if (track.nowrite) throw new ReentryError(ERR_WRITE);
         if (Object.is(this._value, value)) return;
+        enter();
         this._value = value;
         this.current = nextN();
-        this.notify(this.current);
+        handle(this, this.current);
+        exit();
     }
 }
 
@@ -502,6 +530,7 @@ abstract class DependentNode extends Node {
     protected visited: boolean = false;
     private _dropped: boolean = false;
 
+    get dirty() { return this._dirty; }
     get dropped() { return this._dropped; }
 
     constructor() {
@@ -509,8 +538,10 @@ abstract class DependentNode extends Node {
         this.checked = MIN_SEQ;
     }
 
-    dirty(current: SequenceNumber) {
+    notifyNeeded(current: SequenceNumber): boolean {
+        const wasDirty = this._dirty;
         this._dirty = current > this.current;
+        return wasDirty != this._dirty;
     }
 
     drop() {
@@ -540,7 +571,7 @@ abstract class DependentNode extends Node {
         }
 
         if (notify) {
-            this.notify(this.current);
+            handle(this, this.current);
         }
     }
 }
@@ -571,8 +602,13 @@ abstract class DerivedNode<T> extends DependentNode {
         track.deps?.push(this);
         if (!this.dropped && check > this.checked) {
             if (this._dirty) {
-                this.do(check);
-                this._dirty = false;
+                try {
+                    enter();
+                    this.do(check);
+                    this._dirty = false;
+                } finally {
+                    exit();
+                }
             }
 
             this.checked = check;
@@ -672,8 +708,13 @@ abstract class EffectNode extends DependentNode {
         if (track.nocall) throw new ReentryError(ERR_CALL);
         if (!this.dropped && check > this.checked) {
             if (this._dirty) {
-                this.do(check);
-                this._dirty = false;
+                try {
+                    enter();
+                    this.do(check);
+                    this._dirty = false;
+                } finally {
+                    exit();
+                }
             }
 
             this.checked = check;

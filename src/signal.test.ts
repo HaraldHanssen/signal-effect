@@ -2,7 +2,7 @@
  * @license MIT
  * Copyright (c) 2023 Harald Hanssen
  */
-import { ReentryError, propup, derived, effect, readonly, signal, signals, update, SignalError, ExecutionHandler, execution, ImmediateExecution, DelayedExecution, drop, ReadableSignal, DelayedExecutionHandler, DerivedSignal } from "./signal";
+import { ReentryError, propup, derived, effect, readonly, signal, signals, update, SignalError, ExecutionHandler, execution, ImmediateExecution, DelayedExecution, drop, ReadableSignal, DelayedExecutionHandler, DerivedSignal, diagnostic } from "./signal";
 
 const jestConsole = console;
 
@@ -756,15 +756,17 @@ describe("Performance", () => {
     const SOLUTIONS = {
         10: [2, 4, -2, -3],
         100: [-2, -4, 2, 3],
-        //500: [-2, 1, -4, -4],
-        //1000: [-2, -4, 2, 3],
+        500: [-2, 1, -4, -4],
+        1000: [-2, -4, 2, 3],
         // 2000: [-2, 1, -4, -4],
         // 2500: [-2, -4, 2, 3],
-        //5000: [-2, 1, -4, -4],
+        // 5000: [-2, 1, -4, -4],
     } as Record<number, number[]>;
-    const ITERS = 2;
+    const ITERS = 1;
+    const log = diagnostic?.enabled ?? false;
 
     function run(layers: number, dynamic: boolean, handler: DelayedExecutionHandler | undefined = undefined): number {
+        if (log) diagnostic.reset();
         const start = {
             a: signal(1),
             b: signal(2),
@@ -778,6 +780,7 @@ describe("Performance", () => {
             c: ReadableSignal<number>,
             d: ReadableSignal<number>,
         };
+        if (log) console.log("setup", diagnostic.counters);
 
         for (let i = layers; i--;) {
             layer = ((x) => {
@@ -798,16 +801,21 @@ describe("Performance", () => {
                 };
             })(layer);
         }
+        if (log) console.log("start", diagnostic.counters);
 
         const startTime = performance.now();
 
-        start.a(4), start.b(3), start.c(2), start.d(1);
+        start.a(4);
+        start.b(3);
+        start.c(2);
+        start.d(1);
         handler?.update();
 
         const end = layer;
         const solution = [end.a(), end.b(), end.c(), end.d()];
         const endTime = performance.now() - startTime;
-
+        if (log) console.log("end", diagnostic.counters);
+        if (log) diagnostic.reset();
         expect(SOLUTIONS[layers]).toEqual(solution);
         return endTime;
     }
@@ -838,6 +846,7 @@ describe("Performance", () => {
             perf.result[name] = {};
             const title = `${name} ${layer} layers`;
             test(title, () => {
+                if (log) console.log(title);
                 const time = average(() => run(Number(layer), dynamic));
                 perf.result[name][layer] = time;
             });
@@ -849,6 +858,7 @@ describe("Performance", () => {
             const title = `${name} ${layer} layers`;
             test(title, () => {
                 withHandler(ImmediateExecution, () => {
+                    if (log) console.log(title);
                     const time = average(() => run(Number(layer), dynamic));
                     perf.result[name][layer] = time;
                 });
@@ -862,6 +872,7 @@ describe("Performance", () => {
             test(title, () => {
                 const handler = DelayedExecution;
                 withHandler(handler, () => {
+                    if (log) console.log(title);
                     const time = average(() => run(Number(layer), dynamic, handler));
                     perf.result[name][layer] = time;
                 });
@@ -887,7 +898,7 @@ describe("Performance", () => {
             const results = layers.map(layer => r[1][layer]);
             let output = "| " + (r[0] + fcol).slice(0, fcol.length) + " |";
             results.forEach(x => {
-                output += (col + x.toFixed(2)).slice(-col.length) + " |";
+                output += (col + x?.toFixed(2)).slice(-col.length) + " |";
             });
             console.log(output);
         });
