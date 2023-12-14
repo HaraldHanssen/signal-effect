@@ -201,20 +201,13 @@ Average of 10 iterations. Results in milliseconds.
 Node v20.10.0 on Mac Air M1
 
 Notes:
-- (f) indicates fixed dependencies. Dependencies are fixed if they are stated upfront like this:
+- (f) indicates fixed dependencies. 
+- (d) indicates dynamic dependencies. 
+- The "manual (d)\5000 error*" is caused by a _maximum call stack exceeded_ exception. Unavoidable in this test with closures that call upon each other.
 
-    ```
-    derived(s1, s2, s3, (x, y, x) => x + y z);
-    ```
-- (d) indicates dynamic dependencies. Dependencies are dynamic if they are stated in the callback like this:
+    Immediate and Delayed are not affected as they execute from the source and outward into the graph. The manual strategy only executes on the point of entry provided to it.
 
-    ```
-    derived(() => s1() + s2() + s3());
-    ```
-
-- The "manual (d)\5000 error*" is caused by a _maximum call stack exceeded_ error. Unavoidable in this test with closures that call upon each other.
-
-    Immediate and Delayed are not affected as they executes from the source and outward into the graph. The manual strategy only executes on the point of entry provided to it.
+- Immediate is somewhat slower (in this test) since this strategy executes all affected dependcies each time a single change has occurred.
 
 ## TODOs
 - [ ] Scoped execution handlers.  
