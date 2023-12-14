@@ -760,7 +760,7 @@ describe("Performance", () => {
         1000: [-2, -4, 2, 3],
         // 2000: [-2, 1, -4, -4],
         // 2500: [-2, -4, 2, 3],
-        // 5000: [-2, 1, -4, -4],
+        //5000: [-2, 1, -4, -4],
     } as Record<number, number[]>;
     const ITERS = 1;
     const log = diagnostic?.enabled ?? false;
@@ -898,7 +898,7 @@ describe("Performance", () => {
             const results = layers.map(layer => r[1][layer]);
             let output = "| " + (r[0] + fcol).slice(0, fcol.length) + " |";
             results.forEach(x => {
-                output += (col + x?.toFixed(2)).slice(-col.length) + " |";
+                output += (col + (x?.toFixed(2) ?? "error*")).slice(-col.length) + " |";
             });
             console.log(output);
         });

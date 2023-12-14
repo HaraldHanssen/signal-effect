@@ -151,13 +151,32 @@ update(); // outputs '42'
 Test based on [cellx](https://github.com/Riim/cellx#benchmark) benchmark.
 
 Average of 10 iterations. Results in milliseconds.
-| handler\layers        | 10        | 100       | 500       | 1000      | 5000      |
-| ---------- | ---------:| ---------:| ---------:| ---------:| ---------:|
-| manual     |      0.04 |      0.50 |      1.03 |      2.09 |     12.09 |
-| immediate  |      0.08 |      0.71 |      3.98 |      7.98 |     41.52 |
-| delayed    |      0.07 |      0.66 |      3.61 |      7.74 |     41.35 |
+| handler\layers  | 10        | 100       | 500       | 1000      | 5000      |
+| --------------- | ---------:| ---------:| ---------:| ---------:| ---------:|
+| manual (f)      |      0.10 |      0.77 |      3.38 |      4.82 |     36.77 |
+| immediate (f)   |      0.11 |      1.17 |      5.89 |     11.86 |     66.33 |
+| delayed (f)     |      0.07 |      0.54 |      3.22 |      6.64 |     35.53 |
+| manual (d)      |      0.11 |      0.99 |      3.94 |      7.48 |    error* |
+| immediate (d)   |      0.12 |      1.36 |      6.49 |     14.03 |     82.46 |
+| delayed (d)     |      0.13 |      0.49 |      2.97 |      6.00 |     28.88 |
+
 Node v20.10.0 on Mac Air M1
 
+Notes:
+- (f) indicates fixed dependencies. Dependencies are fixed if they are stated upfront like this:
+
+    ```
+    derived(f1, f2, f3, (x, y, x) => x + y z);
+    ```
+- (d) indicates dynamic dependencies. Dependencies are dynamic if they are stated in the callback like this:
+
+    ```
+    derived(() => f1() + f2() + f3());
+    ```
+
+- The "manual (d)\5000 error*" is caused by a _maximum call stack exceeded_ error. Unavoidable in this test with closures that call upon each other.
+
+    Immediate and Delayed are not affected as they executes from the source and outward into the graph. The manual strategy only executes on the point of entry provided to it.
 
 ## TODOs
 - [ ] Automatic dependency discovery for deriveds and effects. Just provide the callback and the rest is figured out.
