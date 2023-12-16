@@ -596,7 +596,6 @@ abstract class DependentNode extends Node {
             }
         } else {
             for (const dep of deps) {
-                Node.link(dep, this);
                 if (dep.current > this.current) this.current = dep.current;
             }
         }
