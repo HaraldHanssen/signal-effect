@@ -2,7 +2,7 @@
  * @license MIT
  * Copyright (c) 2023 Harald Hanssen
  */
-import { ReentryError, propup, derived, effect, readonly, signal, signals, update, SignalError, ExecutionHandler, execution, ImmediateExecution, DelayedExecution, drop, ReadableSignal, DelayedExecutionHandler, DerivedSignal, diagnostic, modify } from "./signal";
+import { ReentryError, propup, derived, effect, readonly, signal, signals, update, SignalError, Execution, execution, Immediate, Delayed, drop, Read, DelayedExecution, Derived, diagnostic, modify } from "./signal";
 
 const jestConsole = console;
 
@@ -14,7 +14,7 @@ afterEach(() => {
     global.console = jestConsole;
 });
 
-function withHandler(handler: ExecutionHandler, action: () => void) {
+function withHandler(handler: Execution, action: () => void) {
     const prev = execution.handler;
     try {
         execution.handler = handler;
@@ -433,7 +433,7 @@ describe("Permissions", () => {
     test("deny reentry looping in derived", () => {
         const s = signal(42);
         const justCalc = derived(s, (x) => x);
-        const enterLoop: DerivedSignal<number> = derived(s, (x) => x + enterLoop() + justCalc());
+        const enterLoop: Derived<number> = derived(s, (x) => x + enterLoop() + justCalc());
 
         for (let i = 42; i < 45; i++) {
             s(i);
@@ -551,7 +551,7 @@ describe("Permissions", () => {
 
 describe("Handlers", () => {
     test("immediate handler calculates the derived upon create and change", () => {
-        withHandler(ImmediateExecution, () => {
+        withHandler(Immediate, () => {
             const [s, t] = signals(0, 2);
             let result = 0;
             derived(s, t, (x, y) => {
@@ -565,7 +565,7 @@ describe("Handlers", () => {
         });
     });
     test("immediate handler acts on the effect upon create and change", () => {
-        withHandler(ImmediateExecution, () => {
+        withHandler(Immediate, () => {
             const [s, t] = signals(0, 2);
             const sum = derived(s, t, (x, y) => x + y);
             let result = 0;
@@ -576,7 +576,7 @@ describe("Handlers", () => {
         });
     });
     test("delayed handler calculates the derived upon update", () => {
-        const handler = DelayedExecution;
+        const handler = Delayed;
         withHandler(handler, () => {
             const [s, t] = signals(0, 2);
             let result = 0;
@@ -595,7 +595,7 @@ describe("Handlers", () => {
         });
     });
     test("delayed handler acts on the effect upon update", () => {
-        const handler = DelayedExecution;
+        const handler = Delayed;
         withHandler(handler, () => {
             const [s, t] = signals(0, 2);
             const sum = derived(s, t, (x, y) => x + y);
@@ -611,7 +611,7 @@ describe("Handlers", () => {
         });
     });
     test("drop removes derived from execution handling", () => {
-        withHandler(ImmediateExecution, () => {
+        withHandler(Immediate, () => {
             const [s, t] = signals(0, 2);
             let result = 0;
             const d = derived(s, t, (x, y) => {
@@ -628,7 +628,7 @@ describe("Handlers", () => {
         });
     });
     test("drop removes effect from execution handling", () => {
-        withHandler(ImmediateExecution, () => {
+        withHandler(Immediate, () => {
             const [s, t] = signals(0, 2);
             const sum = derived(s, t, (x, y) => x + y);
             let result = 0;
@@ -719,7 +719,7 @@ describe("Examples", () => {
         expect(acted).toBe(2);
     });
     test("example use immediate execution handler", () => {
-        withHandler(ImmediateExecution, () => {
+        withHandler(Immediate, () => {
             let acted = 0;
             let result = 0;
             const a = signal(1);
@@ -735,7 +735,7 @@ describe("Examples", () => {
         });
     });
     test("example use delayed execution handler", () => {
-        withHandler(DelayedExecution, () => {
+        withHandler(Delayed, () => {
             let acted = 0;
             let result = 0;
             const a = signal(1);
@@ -783,7 +783,7 @@ describe("Performance", () => {
     const ITERS = 1;
     const log = diagnostic?.enabled ?? false;
 
-    function run(layers: number, dynamic: boolean, handler: DelayedExecutionHandler | undefined = undefined): number {
+    function run(layers: number, dynamic: boolean, handler: DelayedExecution | undefined = undefined): number {
         if (log) diagnostic.reset();
         const start = {
             a: signal(1),
@@ -793,10 +793,10 @@ describe("Performance", () => {
         };
 
         let layer = start as {
-            a: ReadableSignal<number>,
-            b: ReadableSignal<number>,
-            c: ReadableSignal<number>,
-            d: ReadableSignal<number>,
+            a: Read<number>,
+            b: Read<number>,
+            c: Read<number>,
+            d: Read<number>,
         };
         if (log) console.log("setup", diagnostic.counters);
 
@@ -875,7 +875,7 @@ describe("Performance", () => {
             perf.result[name] = {};
             const title = `${name} ${layer} layers`;
             test(title, () => {
-                withHandler(ImmediateExecution, () => {
+                withHandler(Immediate, () => {
                     if (log) console.log(title);
                     const time = average(() => run(Number(layer), dynamic));
                     perf.result[name][layer] = time;
@@ -888,7 +888,7 @@ describe("Performance", () => {
             perf.result[name] = {};
             const title = `${name} ${layer} layers`;
             test(title, () => {
-                const handler = DelayedExecution;
+                const handler = Delayed;
                 withHandler(handler, () => {
                     if (log) console.log(title);
                     const time = average(() => run(Number(layer), dynamic, handler));
